@@ -1,0 +1,8 @@
+psutil
+uvloop
+pydantic
+zstandard
+cryptography
+python-dotenv
+orjson
+msgspec
