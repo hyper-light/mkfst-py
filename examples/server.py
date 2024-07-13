@@ -1,45 +1,98 @@
 import asyncio
 import datetime
-from typing import Literal
 
-from mkfst import Group, Service, endpoint
-from pydantic import BaseModel, StrictInt, StrictStr, conlist
+from pydantic import BaseModel, StrictStr
 
-
-class Message(BaseModel):
-    text: StrictStr
-    priority: StrictInt
-
-
-class Operation(BaseModel):
-    messages: conlist(Message, min_length=1)
-    username: StrictStr
-    date: datetime.datetime
+from mkfst import (
+    HTML,
+    Group,
+    Service,
+    endpoint,
+)
 
 
-class OperationMetadata(BaseModel):
+class MetadataV2(BaseModel):
+    accessed: datetime.datetime
+
+
+class MetadataV1(BaseModel):
     created: datetime.datetime
+    updated: datetime.datetime
 
 
-class OperationResponse(BaseModel):
-    status: Literal['OK', 'FAILED']
-    metadata: OperationMetadata
+class User(BaseModel):
+    username: StrictStr
+    password: StrictStr
+    metadata: MetadataV1 | MetadataV2
 
 
-class UpdateService(Group):
+class UsersApiV1(Group):
 
     @endpoint('/get')
-    async def get_service(self) -> Literal['OK']:
-        return 'OK'
+    async def get_service(self) -> User:
+        return User(
+            username='johnnyj',
+            password='Password12345',
+            metadata=MetadataV1(
+                created=datetime.datetime.now(),
+                updated=datetime.datetime.now(),
+            )
+        )
+    
+class UsersApiV2(Group):
 
+    @endpoint('/get')
+    async def get_service(self) -> User:
+        return User(
+            username='johnnyj',
+            password='Password12345',
+            metadata=MetadataV2(
+                accessed=datetime.datetime.now()
+            )
+        )
+    
+class ApiV1(Group):
+    pass
+
+class ApiV2(Group):
+    pass
+    
 
 class TestService(Service):
-    pass
+    
+    @endpoint('/home')
+    async def get_home(self) -> HTML:
+        return HTML(content="""
+        <!DOCTYPE html>
+        <html>
+            <head>
+                <title>Home</title>
+            </head>
+            <body>
+                <h1>Hello from home!</h1>
+            </body>
+        </html>
+        """)
+        
 
 async def run_server():
     server = TestService(
         'localhost',
         5019,
+        groups=[
+            ApiV1(
+                '/api/v1',
+                groups=[
+                    UsersApiV1('/users')
+                ]
+            ),
+            ApiV2(
+                '/api/v2',
+                groups=[
+                    UsersApiV2('/users')
+                ]
+            )
+        ]
     )
 
     await server.start_server()

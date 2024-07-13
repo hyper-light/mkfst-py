@@ -172,8 +172,6 @@ class Group:
             routes[handler.path] = {
                 method: endpoint for method in handler.methods
             }
-
-            methods = handler.methods
             
             if (
                 len(response_types) > 1
@@ -183,42 +181,36 @@ class Group:
                 model = response_types[0]
                 status_code = response_types[1]
 
-                response_parsers.update({
-                    f'{method}_{handler.path}': (
-                        model,
-                        status_code
-                    ) for method in methods
-                })
+                response_parsers[path] = (
+                    model,
+                    status_code
+                )
 
             elif len(response_types) > 0 and response_types[0] in BaseModel.__subclasses__():
                 model = response_types[0]
 
-                response_parsers.update({
-                    f'{method}_{handler.path}': (
-                        model,
-                        200
-                    ) for method in methods
-                })
+                response_parsers[path] = (
+                    model,
+                    200
+                )
 
-            elif return_type and return_type in BaseModel.__subclasses__() or return_type in [
+            elif return_type in BaseModel.__subclasses__() or return_type in [
                 HTML,
                 FileUpload
-            ]:                
-                response_parsers.update({
-                    f'{method}_{handler.path}': (
-                        model,
-                        200
-                    ) for method in methods
-                })
+            ]:            
+                response_parsers[path] = (
+                    return_type,
+                    200
+                )
 
             if isinstance(handler.responses, dict):
                 responses = handler.responses
 
                 response_parsers.update({
-                    f'{method}_{handler.path}': (
+                    path: (
                         response_model,
                         status
-                    ) for method in methods for status, response_model in responses.items() if (
+                    ) for status, response_model in responses.items() if (
                         issubclass(response_model, BaseModel)
                     )
                 })

@@ -52,7 +52,7 @@ from mkfst.hooks import endpoint
 from mkfst.logging import Logger
 from mkfst.middleware.base import Middleware
 from mkfst.middleware.base.base_wrapper import BaseWrapper
-from mkfst.models.http import HTML
+from mkfst.models.http import HTML, FileUpload
 from mkfst.models.logging import Event
 from mkfst.tasks import TaskRunner
 
@@ -614,13 +614,25 @@ class Service(Generic[E]):
                     ) for method in methods
                 })
 
-            elif return_type == dict or return_type == list:
+            elif return_type is dict or return_type is list:
                 response_parsers.update({
                     f'{method}_{handler.path}': (
                         return_type,
                         200
                     ) for method in methods
                 })
+
+            elif return_type and return_type in BaseModel.__subclasses__() or return_type in [
+                HTML,
+                FileUpload
+            ]:                
+                response_parsers.update({
+                    f'{method}_{handler.path}': (
+                        return_type,
+                        200
+                    ) for method in methods
+                })
+
             
             if isinstance(handler.responses, dict):
                 responses = handler.responses

@@ -430,7 +430,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         message=f'Request - {method} {path}:{ip_address} - completed route handler execution'
                     ))
 
-
                 if response_parser:
                     await ctx.log(Event(
                         level=LogLevel.DEBUG,

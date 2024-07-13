@@ -12,10 +12,12 @@ def parse_response(
     response_model: Type[BaseModel | FileUpload | HTML | dict | list | str | bytes ],
 ) -> str:
 
-    if isinstance(response, HTML):
+    if response_model == HTML or isinstance(response, HTML):
         return response.format()
     
-    elif isinstance(response, FileUpload) and isinstance(response.data, bytes):
+    elif (
+        response_model == FileUpload or isinstance(response, FileUpload) 
+    ) and isinstance(response.data, bytes):
         return response.data.decode(response.encoding)
     
     elif response_model in FileUpload.__subclasses__():
