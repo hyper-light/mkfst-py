@@ -33,108 +33,80 @@ from mkfst.models.http import (
 )
 from mkfst.tasks import TaskRunner
 
-Tag = Dict[
-    Literal[
-        'value',
-        'description',
-        'docs_description',
-        'docs_url'
-    ],
-    str
-]
+Tag = Dict[Literal["value", "description", "docs_description", "docs_url"], str]
 
 
 def join_paths(*paths: str):
-    joined = '/'.join([
-        path.strip('/') for path in paths
-    ])
+    joined = "/".join([path.strip("/") for path in paths])
 
-    return f'/{joined}'
+    return f"/{joined}"
+
 
 class Group:
-
     def __init__(
         self,
         base: str,
         groups: List[Group] | None = None,
         middleware: List[Middleware] | None = None,
-        tags: List[Tag] | None = None
+        tags: List[Tag] | None = None,
     ) -> None:
-        
         if groups is None:
             groups = []
 
         if middleware is None:
             middleware = []
-        
+
         self.service_name = self.__class__.__name__
         self._base = base
         self._groups = groups
-        self._middleware : List[Middleware] = middleware
+        self._middleware: List[Middleware] = middleware
         self._supported_handlers: Dict[str, Dict[str, str]] = defaultdict(dict)
         self._handlers: Dict[str, Callable[..., Awaitable[Any]]] = {}
-        
+
         self.tags = tags or []
 
-        if self.service_name != 'Group':
-            self.tags.append(ParsedTag(
-                value=self.service_name,
-                description=f"The {self.service_name} service group."
-            ))
+        if self.service_name != "Group":
+            self.tags.append(
+                ParsedTag(
+                    value=self.service_name,
+                    description=f"The {self.service_name} service group.",
+                )
+            )
 
         if groups:
             for group in groups:
                 self.tags.extend(group.tags)
 
-        
     def _assemble(
         self,
         instance_id: int,
         env: Env,
         parent_middleware: List[Middleware],
     ):
-        
-        self._middleware.extend([
-            middleware for middleware in parent_middleware if middleware not in self._middleware
-        ])
-        
-        task_runner = TaskRunner(
-            instance_id,
-            env
+        self._middleware.extend(
+            [
+                middleware
+                for middleware in parent_middleware
+                if middleware not in self._middleware
+            ]
         )
+
+        task_runner = TaskRunner(instance_id, env)
 
         parsers: Dict[str, Any] = {}
         events: Dict[str, Coroutine] = {}
-        match_routes: Dict[
-            str,
-            Dict[
-                str,
-                Callable[
-                    ...,
-                    Awaitable[Any]
-                ]
-            ]
-        ] = {}
-    
+        match_routes: Dict[str, Dict[str, Callable[..., Awaitable[Any]]]] = {}
+
         request_parsers: Dict[str, BaseModel] = {}
         response_parsers: Dict[BaseModel, Tuple[Callable[[Any], str], int]] = {}
 
         middleware_enabled: Dict[str, bool] = {}
-        
-        routes: Dict[
-            str,
-            Dict[
-                str,
-                Callable[
-                    ...,
-                    Awaitable[Any]
-                ]
-            ]
-        ] = {}
-        
+
+        routes: Dict[str, Dict[str, Callable[..., Awaitable[Any]]]] = {}
+
         (
-            endpoints, 
-            tasks, 
+            endpoints,
+            tasks,
             fabricators,
             endpoint_docs,
             response_headers,
@@ -144,7 +116,6 @@ class Group:
             task_runner.add(task)
 
         for path, endpoint in endpoints.items():
-
             handler = endpoint
             has_middleware = len(self._middleware) > 0
             if has_middleware:
@@ -156,23 +127,23 @@ class Group:
             endpoint_signature = inspect.signature(handler)
             params = endpoint_signature.parameters.values()
 
-            return_type = get_type_hints(handler).get('return')
+            return_type = get_type_hints(handler).get("return")
             response_types = get_args(return_type)
 
-            request_parsers.update({
-                path: get_args(
-                    param_type.annotation
-                )[0] for param_type in params if (
-                    (args := get_args(param_type.annotation)) and
-                    len(args) > 0 and
-                    args[0] in BaseModel.__subclasses__()
-                )
-            })
+            request_parsers.update(
+                {
+                    path: get_args(param_type.annotation)[0]
+                    for param_type in params
+                    if (
+                        (args := get_args(param_type.annotation))
+                        and len(args) > 0
+                        and args[0] in BaseModel.__subclasses__()
+                    )
+                }
+            )
 
-            routes[handler.path] = {
-                method: endpoint for method in handler.methods
-            }
-            
+            routes[handler.path] = {method: endpoint for method in handler.methods}
+
             if (
                 len(response_types) > 1
                 and inspect.isclass(response_types[0])
@@ -181,39 +152,32 @@ class Group:
                 model = response_types[0]
                 status_code = response_types[1]
 
-                response_parsers[path] = (
-                    model,
-                    status_code
-                )
+                response_parsers[path] = (model, status_code)
 
-            elif len(response_types) > 0 and response_types[0] in BaseModel.__subclasses__():
+            elif (
+                len(response_types) > 0
+                and response_types[0] in BaseModel.__subclasses__()
+            ):
                 model = response_types[0]
 
-                response_parsers[path] = (
-                    model,
-                    200
-                )
+                response_parsers[path] = (model, 200)
 
             elif return_type in BaseModel.__subclasses__() or return_type in [
                 HTML,
-                FileUpload
-            ]:            
-                response_parsers[path] = (
-                    return_type,
-                    200
-                )
+                FileUpload,
+            ]:
+                response_parsers[path] = (return_type, 200)
 
             if isinstance(handler.responses, dict):
                 responses = handler.responses
 
-                response_parsers.update({
-                    path: (
-                        response_model,
-                        status
-                    ) for status, response_model in responses.items() if (
-                        issubclass(response_model, BaseModel)
-                    )
-                })
+                response_parsers.update(
+                    {
+                        path: (response_model, status)
+                        for status, response_model in responses.items()
+                        if (issubclass(response_model, BaseModel))
+                    }
+                )
 
         parsers.update(request_parsers)
         parsers.update(response_parsers)
@@ -242,43 +206,41 @@ class Group:
             response_parsers.update(assembled["response_parsers"])
             fabricators.update(assembled["fabricators"])
             endpoint_docs.update(assembled["endpoint_docs"])
-            response_headers.update(assembled['response_headers'])
-            group_middleware.extend([
-                middleware for middleware in assembled['middleware'] if middleware not in self._middleware
-            ])
+            response_headers.update(assembled["response_headers"])
+            group_middleware.extend(
+                [
+                    middleware
+                    for middleware in assembled["middleware"]
+                    if middleware not in self._middleware
+                ]
+            )
 
         return {
-            'routes': routes,
-            'match_routes': match_routes,
-            'events': events,
-            'parsers': parsers,
-            'middleware_enabled': middleware_enabled,
-            'supported_handlers': self._supported_handlers,
+            "routes": routes,
+            "match_routes": match_routes,
+            "events": events,
+            "parsers": parsers,
+            "middleware_enabled": middleware_enabled,
+            "supported_handlers": self._supported_handlers,
             "request_parsers": request_parsers,
             "response_parsers": response_parsers,
             "fabricators": fabricators,
             "endpoint_docs": endpoint_docs,
             "middleware": group_middleware,
-            'response_headers': response_headers
+            "response_headers": response_headers,
         }
 
     def _gather_hooks(self):
-
         reserved = ["connect", "close"]
         endpoints: Dict[
-            str, 
-            Callable[
-                ..., 
-                Awaitable[BaseModel | Dict[Any, Any] | str]
-            ]
+            str, Callable[..., Awaitable[BaseModel | Dict[Any, Any] | str]]
         ] = {}
-        tasks: Dict[str, Callable[[], Awaitable[Any]]] = {} 
+        tasks: Dict[str, Callable[[], Awaitable[Any]]] = {}
         fabricators: Dict[str, Fabricator] = {}
         endpoint_docs: Dict[str, ParsedEndpoint] = {}
         response_headers: Dict[str, Dict[str, Any]] = {}
 
         for _, call in inspect.getmembers(self, predicate=inspect.ismethod):
-
             hook_name: str = call.__name__
             not_internal = hook_name.startswith("__") is False
             not_reserved = hook_name not in reserved
@@ -286,7 +248,6 @@ class Group:
             is_task = hasattr(call, "as_task")
 
             if not_internal and not_reserved and is_endpoint:
-                
                 methods: List[str] = call.methods
                 path: str = call.path
 
@@ -296,34 +257,35 @@ class Group:
 
                 endpoint_path = join_paths(self._base, path)
 
-                endpoints.update({
-                    f'{method}_{endpoint_path}': call for method in methods
-                })
+                endpoints.update(
+                    {f"{method}_{endpoint_path}": call for method in methods}
+                )
 
-                self._handlers.update({
-                    f'{method}_{endpoint_path}': handler for method in methods
-                })
+                self._handlers.update(
+                    {f"{method}_{endpoint_path}": handler for method in methods}
+                )
 
                 call_params = inspect.signature(handler).parameters
 
                 required_params = [
-                    (key, value.annotation) for key, value in call_params.items() if value.default == inspect._empty
+                    (key, value.annotation)
+                    for key, value in call_params.items()
+                    if value.default == inspect._empty
                 ]
 
                 optional_params = {
-                    key: get_args(value.annotation) for key, value in call_params.items() if value.default != inspect._empty
+                    key: get_args(value.annotation)
+                    for key, value in call_params.items()
+                    if value.default != inspect._empty
                 }
 
-                fabricator = Fabricator(
-                    required_params,
-                    optional_params
-                )
-                
-                return_type = get_type_hints(handler).get('return')
+                fabricator = Fabricator(required_params, optional_params)
+
+                return_type = get_type_hints(handler).get("return")
                 response_types = get_args(return_type)
 
                 responses: Dict[int, Any] = {}
-                
+
                 if (
                     len(response_types) > 1
                     and inspect.isclass(response_types[0])
@@ -337,7 +299,10 @@ class Group:
                 elif len(response_types) == 1:
                     responses[200] = response_types[0]
 
-                elif len(response_types) > 0 and response_types[0] in BaseModel.__subclasses__():
+                elif (
+                    len(response_types) > 0
+                    and response_types[0] in BaseModel.__subclasses__()
+                ):
                     model = response_types[0]
                     responses[200] = model
 
@@ -347,46 +312,43 @@ class Group:
                 if isinstance(handler.responses, dict):
                     responses.update(handler.responses)
 
-                additional_docs: Dict[   
-                    Literal[
-                        'docs_description',
-                        'docs_url'
-                    ], 
-                    str
-                ] = {}
+                additional_docs: Dict[Literal["docs_description", "docs_url"], str] = {}
 
                 if isinstance(handler.additional_docs, dict):
                     additional_docs = handler.additional_docs
 
                 method_metadata: Dict[
                     Literal[
-                        "GET", 
-                        "HEAD", 
-                        "OPTIONS", 
-                        "POST", 
-                        "PUT", 
-                        "PATCH", 
-                        "DELETE", 
+                        "GET",
+                        "HEAD",
+                        "OPTIONS",
+                        "POST",
+                        "PUT",
+                        "PATCH",
+                        "DELETE",
                         "TRACE",
                     ],
                     Dict[
                         Literal[
-                            'name',
-                            'tags',
-                            'description',
-                            'summary',
-                            'docs_url',
-                            'docs_description',
-                            'depreciated',
+                            "name",
+                            "tags",
+                            "description",
+                            "summary",
+                            "docs_url",
+                            "docs_description",
+                            "depreciated",
                         ],
-                        str | List[str] | bool
-                    ]
+                        str | List[str] | bool,
+                    ],
                 ] = handler.method_metadata
 
                 call_response_headers = dict(handler.response_headers)
-                response_headers.update({
-                    f'{method}_{endpoint_path}': dict(handler.response_headers) for method in methods
-                }) 
+                response_headers.update(
+                    {
+                        f"{method}_{endpoint_path}": dict(handler.response_headers)
+                        for method in methods
+                    }
+                )
 
                 endpoint_docs[endpoint_path] = ParsedEndpoint(
                     path=endpoint_path,
@@ -398,17 +360,18 @@ class Group:
                             method: ParsedOperationMetadata(
                                 group_name=self.service_name,
                                 name=method_metadata[method].get(
-                                    'name',
-                                    handler.__name__
+                                    "name", handler.__name__
                                 ),
-                                tags=method_metadata[method].get('tags'),
-                                description=method_metadata[method].get('description'),
-                                docs_description=additional_docs.get('docs_description'),
-                                docs_url=additional_docs.get('docs_url'),
-                                deprecated=method_metadata[method].get('depreciated')
-
-                            ) for method in methods
-                        }
+                                tags=method_metadata[method].get("tags"),
+                                description=method_metadata[method].get("description"),
+                                docs_description=additional_docs.get(
+                                    "docs_description"
+                                ),
+                                docs_url=additional_docs.get("docs_url"),
+                                deprecated=method_metadata[method].get("depreciated"),
+                            )
+                            for method in methods
+                        },
                     ),
                     responses=responses,
                     response_headers=call_response_headers,
@@ -416,11 +379,11 @@ class Group:
                     parameters=fabricator["parameters"],
                     query=fabricator["query"],
                     body=fabricator["body"],
-                    required=fabricator.required_params
+                    required=fabricator.required_params,
                 )
 
                 for method in methods:
-                    endpoint_method_key = f'{method}_{endpoint_path}'
+                    endpoint_method_key = f"{method}_{endpoint_path}"
                     fabricators[endpoint_method_key] = fabricator
 
                 self._supported_handlers[endpoint_path] = {
@@ -438,34 +401,29 @@ class Group:
             endpoint_docs,
             response_headers,
         )
-    
+
     def _gather_groups(
-        self,
-        instance_id: int,
-        env: Env
+        self, instance_id: int, env: Env
     ) -> List[
         Dict[
             Literal[
-                'routes',
-                'match_routes',
-                'events',
-                'parsers',
-                'middleware_enabled',
-                'supported_handlers',
+                "routes",
+                "match_routes",
+                "events",
+                "parsers",
+                "middleware_enabled",
+                "supported_handlers",
                 "response_parsers",
                 "request_parsers",
                 "fabricators",
                 "endpoint_docs",
                 "middleware",
-                'response_headers',
+                "response_headers",
             ],
-            Dict[str, Any]
+            Dict[str, Any],
         ]
     ]:
         return [
-            group._assemble(
-                instance_id,
-                env,
-                self._middleware
-            ) for group in self._groups
+            group._assemble(instance_id, env, self._middleware)
+            for group in self._groups
         ]

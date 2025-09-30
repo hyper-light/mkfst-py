@@ -3,173 +3,87 @@ from __future__ import annotations
 import asyncio
 import functools
 import inspect
-import multiprocessing as mp
+import multiprocessing
 import os
 import random
 import signal
 import socket
 import sys
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from inspect import signature
 from typing import (
-        Any,
-        Awaitable,
-        Callable,
-        Dict,
-        Generic,
-        List,
-        Literal,
-        Optional,
-        Tuple,
-        Type,
-        TypeVar,
-        Union,
-        get_args,
-        get_type_hints,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Generic,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+    get_args,
+    get_type_hints,
 )
 
 from pydantic import BaseModel
 
 from mkfst.connection.tcp.fabricator import Fabricator
 from mkfst.connection.tcp.mercury_sync_http_connection import (
-        MercurySyncHTTPConnection,
+    MercurySyncHTTPConnection,
 )
 from mkfst.docs import (
-        ParsedAPIMetadata,
-        ParsedAPIServer,
-        ParsedEndpoint,
-        ParsedEndpointMetadata,
-        ParsedOperationMetadata,
-        ParsedServerVariable,
-        ParsedTag,
-        create_api_definition,
-        get_redoc_html,
-        get_swagger_ui_html,
+    ParsedAPIMetadata,
+    ParsedAPIServer,
+    ParsedEndpoint,
+    ParsedEndpointMetadata,
+    ParsedOperationMetadata,
+    ParsedServerVariable,
+    ParsedTag,
+    create_api_definition,
+    get_redoc_html,
+    get_swagger_ui_html,
 )
 from mkfst.env import Env, load_env
 from mkfst.hooks import endpoint
-from mkfst.logging import Logger
+from mkfst.logging import Logger, LogLevelName, LoggingConfig
 from mkfst.middleware.base import Middleware
 from mkfst.middleware.base.base_wrapper import BaseWrapper
 from mkfst.models.http import HTML, FileUpload
 from mkfst.models.logging import Event
+
 from mkfst.tasks import TaskRunner
 
 from .group import Group
 from .socket import bind_tcp_socket
 
-E = TypeVar('E', bound=Env)
 
-ServerVariable = Dict[
-    Literal[
-        'options',
-        'default',
-        'description'
-    ], 
-    List[str] | str
-]
-
-Tag = Dict[
-    Literal[
-        'value',
-        'description',
-        'docs_description',
-        'docs_url'
-    ],
-    str
-]
+multiprocessing.allow_connection_pickling()
+spawn = multiprocessing.get_context("spawn")
 
 
-mp.allow_connection_pickling()
-spawn = mp.get_context("spawn")
+E = TypeVar("E", bound=Env)
 
+ServerVariable = Dict[Literal["options", "default", "description"], List[str] | str]
 
-
-def handle_worker_loop_stop(
-    signame,
-    server: Service,
-    loop: asyncio.AbstractEventLoop
-):
-        try:
-
-            try:
-                server.abort()
-            except Exception:
-                import traceback
-                print(traceback.format_exc())
-
-            pending_events = asyncio.all_tasks()
-            
-            for task in pending_events:
-                if not task.cancelled():
-                    try:
-                        task.cancel()
-                    except asyncio.CancelledError:
-                        pass
-                    except asyncio.InvalidStateError:
-                        pass
-
-       
-
-        except BrokenPipeError:
-            pass
-
-        except RuntimeError:
-            pass
-
-
-def handle_loop_stop(
-    signame,
-    executor: Union[ProcessPoolExecutor, ThreadPoolExecutor]
-):
-    try:
-        executor.shutdown(cancel_futures=True, wait=True)
-
-    except BrokenPipeError:
-        pass
-
-    except RuntimeError:
-        pass
-
-    except KeyboardInterrupt:
-        pass
-
-    sys.exit()
-
-async def handle_runner_stop(
-        signame,
-        executor: Union[ProcessPoolExecutor, ThreadPoolExecutor],
-        runner: TaskRunner
-):
-    await runner.shutdown()
-
-    try:
-        executor.shutdown()
-
-    except BrokenPipeError:
-        pass
-
-    except RuntimeError:
-        pass
+Tag = Dict[Literal["value", "description", "docs_description", "docs_url"], str]
 
 
 async def run(
     service_name: str,
     tcp_connection: MercurySyncHTTPConnection,
-    custom_env: BaseModel,
-    env: Env,
+    env: BaseModel,
     groups: List[Group],
     config: Dict[str, Union[int, socket.socket, str]] = {},
 ):
-
     try:
-
         tcp_connection.from_env(env)
 
         services = {cls.__name__: cls for cls in Service.__subclasses__()}
         service: Type[Service] = services.get(service_name)
-
 
         server = service(
             tcp_connection.host,
@@ -177,41 +91,54 @@ async def run(
             tcp_connection._client_cert_path,
             tcp_connection._client_key_path,
             groups=groups,
-            env=custom_env
+            env=env,
+            log_level=config.get("log_level", "info"),
         )
 
-        loop = asyncio.get_event_loop()
-
-        for signame in ("SIGINT", "SIGTERM", "SIG_IGN"):
-            loop.add_signal_handler(
-                getattr(signal, signame),
-                lambda signame=signame: handle_worker_loop_stop(signame, server, loop),
-            )
-
-        await server.start_server(
+        await server.run(
             cert_path=config.get("cert_path"),
             key_path=config.get("key_path"),
             worker_socket=config.get("tcp_socket"),
         )
-        await server.run_forever()
-
-    except KeyboardInterrupt:
-        server.abort()
 
     except Exception:
-        server.abort()
+        pass
+
+    current_task = asyncio.current_task()
+
+    tasks = asyncio.all_tasks()
+    for task in tasks:
+        if task != current_task:
+            try:
+                task.cancel()
+
+            except (
+                Exception,
+                asyncio.InvalidStateError,
+                asyncio.CancelledError,
+                asyncio.TimeoutError,
+                AssertionError,
+            ):
+                pass
+
+    try:
+        await asyncio.gather(
+            *[task for task in tasks if task != current_task], return_exceptions=True
+        )
+
+    except Exception:
+        pass
 
 
 def start_pool(
     tcp_connection: MercurySyncHTTPConnection,
     service_name: str,
     custom_env: BaseModel,
-    env: Env,
     groups: List[Group],
     config: Dict[str, Union[int, socket.socket, str]] = {},
 ):
     import asyncio
-    
+
     try:
         import uvloop
 
@@ -230,35 +157,36 @@ def start_pool(
     stdin_fileno = config.get("stdin_fileno")
 
     if stdin_fileno is not None:
-        sys.stdin = os.fdopen(stdin_fileno)
+        sys.stdin = os.fdopen(os.dup(stdin_fileno))
 
     try:
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(run(
-            service_name,
-            tcp_connection,
-            custom_env,
-            env, 
-            groups,
-            config,
-        ))
+        loop.run_until_complete(
+            run(
+                service_name,
+                tcp_connection,
+                custom_env,
+                groups,
+                config,
+            )
+        )
 
     except Exception:
         pass
 
 
 class Service(Generic[E]):
-
     def __init__(
         self,
         host: str,
         port: int,
         cert_path: Optional[str] = None,
         key_path: Optional[str] = None,
-        workers: int = 0,
+        workers: int = os.cpu_count(),
         env: Optional[E] = None,
         engine: Literal["process", "async"] = "process",
         groups: List[Group] | None = None,
+        log_level: LogLevelName = "info",
         middleware: List[Middleware] | None = None,
         service_metadata: Dict[
             Literal[
@@ -273,17 +201,23 @@ class Service(Generic[E]):
                 "license_url",
                 "server_url",
                 "server_description",
-                "server_variables"
+                "server_variables",
             ],
-            str | Dict[str, ServerVariable]
-        ] | None = None,
+            str | Dict[str, ServerVariable],
+        ]
+        | None = None,
         tags: List[Tag] | None = None,
     ) -> None:
-        self.env = env
-        env = load_env(Env)
+        self.env = load_env(Env, existing=env)
 
         self.name = self.__class__.__name__
+        self._logging_config = LoggingConfig(level=log_level)
         self.logger = Logger()
+        self.logger.configure(
+            name=self.name,
+            level=log_level,
+        )
+
         self._instance_id = random.randint(0, 2**16)
         self._host_map: Dict[
             str,
@@ -299,21 +233,18 @@ class Service(Generic[E]):
         self._service_metadata = service_metadata
         self._tags = tags or []
 
-        self._service_name = self._service_metadata.get(
-            'name',
-            self.name
-        )
+        self._service_name = self._service_metadata.get("name", self.name)
 
-        self._tags.append(ParsedTag(
-            value=self._service_name,
-            description=f"The {self._service_name} service group."
-        ))
+        self._tags.append(
+            ParsedTag(
+                value=self._service_name,
+                description=f"The {self._service_name} service group.",
+            )
+        )
 
         if groups:
             for group in groups:
-                self._tags.extend(
-                    group.tags
-                )
+                self._tags.extend(group.tags)
 
         if workers < 1:
             workers = 1
@@ -334,7 +265,7 @@ class Service(Generic[E]):
         self.middleware = middleware
         self.groups = groups
 
-        self._env = env
+        self._is_worker = False
         self._engine: Union[ProcessPoolExecutor, None] = None
         self._tcp_queue: Dict[Tuple[str, int], asyncio.Queue] = defaultdict(
             asyncio.Queue
@@ -349,22 +280,13 @@ class Service(Generic[E]):
             self.host,
             self.port,
             self._instance_id,
-            env=env,
+            env=self.env,
         )
 
-        self.tasks = TaskRunner(
-            self._instance_id,
-            env
-        )
+        self.tasks = TaskRunner(self._instance_id, env)
 
-        self._handlers: Dict[
-            str,
-            Callable[..., Awaitable[Any]]
-        ] = {}
-        self._response_headers: Dict[
-            str,
-            Dict[str, Any]
-        ] = {}
+        self._handlers: Dict[str, Callable[..., Awaitable[Any]]] = {}
+        self._response_headers: Dict[str, Dict[str, Any]] = {}
 
         self._endpoint_docs: Dict[str, ParsedEndpoint] = {}
         self._docs_json: str | None = None
@@ -373,78 +295,74 @@ class Service(Generic[E]):
             "/openapi.json",
             "/docs",
             "/docs/oauth2-redirect",
-            "/redoc"
+            "/redoc",
         ]
+
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         self._setup()
         self._apply_groups()
         self._create_docs()
 
     @endpoint("/api/status")
-    async def status(self) -> Literal['OK']:
-        return 'OK'
-    
-    @endpoint(
-        "/openapi.json"
-    )
+    async def status(self) -> Literal["OK"]:
+        return "OK"
+
+    @endpoint("/openapi.json")
     async def get_openapi_json(self) -> dict:
         return self._docs_json
-    
+
     @endpoint("/docs")
     async def get_docs(self) -> HTML:
-
-        title = self._service_metadata.get('name', self.name)
+        title = self._service_metadata.get("name", self.name)
 
         return get_swagger_ui_html(
-            openapi_url="/openapi.json",
-            title=f'{title} - Swagger UI'
+            openapi_url="/openapi.json", title=f"{title} - Swagger UI"
         )
-    
+
     @endpoint("/redoc")
     async def get_redocs(self) -> HTML:
-
-        title = self._service_metadata.get('name', self.name)
+        title = self._service_metadata.get("name", self.name)
 
         return get_redoc_html(
-            openapi_url="/openapi.json",
-            title=f'{title} - Swagger UI'
+            openapi_url="/openapi.json", title=f"{title} - Swagger UI"
         )
-    
-    @endpoint(
-        "/docs/oauth2-redirect",
-        response_headers={
-            'Content-Type': 'text/html'
-        }
-    )
+
+    @endpoint("/docs/oauth2-redirect", response_headers={"Content-Type": "text/html"})
     async def get_docs_auth_redirect(self) -> HTML:
         return
 
     def _create_docs(self):
         server_url = self._service_metadata.get("server_url")
-        if server_url is None and self._env.MERCURY_SYNC_SERVER_URL:
-            server_url = self._env.MERCURY_SYNC_SERVER_URL.unicode_string()
+        if server_url is None and self.env.MERCURY_SYNC_SERVER_URL:
+            server_url = self.env.MERCURY_SYNC_SERVER_URL.unicode_string()
 
         elif self.cert_path and self.key_path:
-            server_url = f'https://{self.host}:{self.port}'
-        
+            server_url = f"https://{self.host}:{self.port}"
+
         else:
-            server_url = f'http://{self.host}:{self.port}'
+            server_url = f"http://{self.host}:{self.port}"
 
         server_variables: Dict[str, ParsedServerVariable] | None = None
-        variables_config: Dict[str, ServerVariable] = self._service_metadata.get('server_variables')
+        variables_config: Dict[str, ServerVariable] = self._service_metadata.get(
+            "server_variables"
+        )
         if isinstance(variables_config, dict) and len(variables_config) > 0:
             server_variables = {
-                    variable_name: ParsedServerVariable(
-                        options=variable_config.get('options'),
-                        default=variable_config.get('default'),
-                        description=variable_config.get('description')
-                    ) for variable_name, variable_config in variables_config.items()
-                }
+                variable_name: ParsedServerVariable(
+                    options=variable_config.get("options"),
+                    default=variable_config.get("default"),
+                    description=variable_config.get("description"),
+                )
+                for variable_name, variable_config in variables_config.items()
+            }
 
         self._docs_json = create_api_definition(
             ParsedAPIMetadata(
                 title=self._service_metadata.get("name", self.name),
-                version=self._service_metadata.get("version", self._env.MERCURY_SYNC_API_VERISON),
+                version=self._service_metadata.get(
+                    "version", self.env.MERCURY_SYNC_API_VERISON
+                ),
                 summary=self._service_metadata.get("summary"),
                 description=self.__doc__,
                 owner=self._service_metadata.get("owner"),
@@ -467,25 +385,21 @@ class Service(Generic[E]):
         for group in self.groups:
             assembled: Dict[
                 Literal[
-                    'routes',
-                    'match_routes',
-                    'events',
-                    'parsers',
-                    'middleware_enabled',
-                    'supported_handlers',
+                    "routes",
+                    "match_routes",
+                    "events",
+                    "parsers",
+                    "middleware_enabled",
+                    "supported_handlers",
                     "response_parsers",
                     "request_parsers",
                     "fabricators",
                     "endpoint_docs",
                     "middleware",
-                    'response_headers',
+                    "response_headers",
                 ],
                 Dict[str, Any],
-            ] = group._assemble(
-                self._instance_id,
-                self._env,
-                self.middleware
-            )
+            ] = group._assemble(self._instance_id, self.env, self.middleware)
 
             self._apply_group(assembled)
 
@@ -493,22 +407,22 @@ class Service(Generic[E]):
         self,
         assembled: Dict[
             Literal[
-                'routes',
-                'match_routes',
-                'events',
-                'parsers',
-                'middleware_enabled',
-                'supported_handlers',
+                "routes",
+                "match_routes",
+                "events",
+                "parsers",
+                "middleware_enabled",
+                "supported_handlers",
                 "response_parsers",
                 "request_parsers",
                 "fabricators",
                 "endpoint_docs",
                 "middleware",
-                'response_headers',
+                "response_headers",
             ],
             Dict[str, Any],
-        ]
-    ): 
+        ],
+    ):
         for route, methods in assembled["routes"].items():
             self._tcp.routes.add(route, methods)
 
@@ -521,23 +435,26 @@ class Service(Generic[E]):
         self._tcp._supported_handlers.update(assembled["supported_handlers"])
         self._tcp._middleware_enabled.update(assembled["middleware_enabled"])
         self._tcp.fabricators.update(assembled["fabricators"])
-        self._tcp._response_headers.update(assembled['response_headers'])
+        self._tcp._response_headers.update(assembled["response_headers"])
         self._endpoint_docs.update(assembled["endpoint_docs"])
-        
-        self._group_middleware.extend([
-            middleware for middleware in assembled['middleware'] if middleware not in self._group_middleware
-        ])
+
+        self._group_middleware.extend(
+            [
+                middleware
+                for middleware in assembled["middleware"]
+                if middleware not in self._group_middleware
+            ]
+        )
 
     def _setup(self):
-    
         response_parsers: Dict[BaseModel, Tuple[Callable[[Any], str], int]] = {}
         request_parsers: Dict[str, BaseModel] = {}
 
         routes = {}
-        
+
         (
-            endpoints, 
-            tasks, 
+            endpoints,
+            tasks,
             fabricators,
         ) = self._gather_hooks()
 
@@ -545,7 +462,6 @@ class Service(Generic[E]):
             self.tasks.add(task)
 
         for path, path_endpoint in endpoints.items():
-
             handler = path_endpoint
             has_middleware = len(self.middleware) > 0
             if has_middleware and handler.path not in self._reserved_urls:
@@ -557,25 +473,25 @@ class Service(Generic[E]):
             endpoint_signature = signature(handler)
             params = endpoint_signature.parameters.values()
 
-            return_type = get_type_hints(handler).get('return')
+            return_type = get_type_hints(handler).get("return")
             response_types = get_args(return_type)
 
-            request_parsers.update({
-                path: get_args(
-                    param_type.annotation
-                )[0] for param_type in params if (
-                    (args := get_args(param_type.annotation)) and
-                    len(args) > 0 and
-                    args[0] in BaseModel.__subclasses__()
-                )
-            })
+            request_parsers.update(
+                {
+                    path: get_args(param_type.annotation)[0]
+                    for param_type in params
+                    if (
+                        (args := get_args(param_type.annotation))
+                        and len(args) > 0
+                        and args[0] in BaseModel.__subclasses__()
+                    )
+                }
+            )
 
-            routes[handler.path] = {
-                method: path_endpoint for method in handler.methods
-            }
+            routes[handler.path] = {method: path_endpoint for method in handler.methods}
 
             methods = handler.methods
-            
+
             if (
                 len(response_types) > 1
                 and inspect.isclass(response_types[0])
@@ -584,67 +500,66 @@ class Service(Generic[E]):
                 model = response_types[0]
                 status_code = response_types[1]
 
-                response_parsers.update({
-                    f'{method}_{handler.path}': (
-                        model,
-                        status_code
-                    ) for method in methods
-                })
+                response_parsers.update(
+                    {
+                        f"{method}_{handler.path}": (model, status_code)
+                        for method in methods
+                    }
+                )
 
-            elif len(response_types) > 0 and response_types[0] in BaseModel.__subclasses__():
+            elif (
+                len(response_types) > 0
+                and response_types[0] in BaseModel.__subclasses__()
+            ):
                 model = response_types[0]
 
-                response_parsers.update({
-                    f'{method}_{handler.path}': (
-                        model,
-                        200
-                    ) for method in methods
-                })
-
-            elif return_type and return_type in BaseModel.__subclasses__() or (
-                inspect.isclass(return_type) and issubclass(
-                    return_type,
-                    BaseModel
+                response_parsers.update(
+                    {f"{method}_{handler.path}": (model, 200) for method in methods}
                 )
+
+            elif (
+                return_type
+                and return_type in BaseModel.__subclasses__()
+                or (inspect.isclass(return_type) and issubclass(return_type, BaseModel))
             ):
-                response_parsers.update({
-                    f'{method}_{handler.path}': (
-                        return_type,
-                        200
-                    ) for method in methods
-                })
+                response_parsers.update(
+                    {
+                        f"{method}_{handler.path}": (return_type, 200)
+                        for method in methods
+                    }
+                )
 
             elif return_type is dict or return_type is list:
-                response_parsers.update({
-                    f'{method}_{handler.path}': (
-                        return_type,
-                        200
-                    ) for method in methods
-                })
+                response_parsers.update(
+                    {
+                        f"{method}_{handler.path}": (return_type, 200)
+                        for method in methods
+                    }
+                )
 
-            elif return_type and return_type in BaseModel.__subclasses__() or return_type in [
-                HTML,
-                FileUpload
-            ]:                
-                response_parsers.update({
-                    f'{method}_{handler.path}': (
-                        return_type,
-                        200
-                    ) for method in methods
-                })
+            elif (
+                return_type
+                and return_type in BaseModel.__subclasses__()
+                or return_type in [HTML, FileUpload]
+            ):
+                response_parsers.update(
+                    {
+                        f"{method}_{handler.path}": (return_type, 200)
+                        for method in methods
+                    }
+                )
 
-            
             if isinstance(handler.responses, dict):
                 responses = handler.responses
 
-                response_parsers.update({
-                    f'{method}_{handler.path}': (
-                        response_model,
-                        status
-                    ) for method in methods for status, response_model in responses.items() if (
-                        issubclass(response_model, BaseModel)
-                    )
-                })
+                response_parsers.update(
+                    {
+                        f"{method}_{handler.path}": (response_model, status)
+                        for method in methods
+                        for status, response_model in responses.items()
+                        if (issubclass(response_model, BaseModel))
+                    }
+                )
 
         self._tcp.parsers.update(request_parsers)
         self._tcp.parsers.update(response_parsers)
@@ -661,31 +576,22 @@ class Service(Generic[E]):
             self._tcp._response_parsers[key] = parser
 
     def _gather_hooks(self):
-
         reserved = ["connect", "close"]
 
         endpoints: Dict[
-            str, 
-            Callable[
-                ..., 
-                Awaitable[BaseModel | Dict[Any, Any] | str]
-            ]
+            str, Callable[..., Awaitable[BaseModel | Dict[Any, Any] | str]]
         ] = {}
         fabricators: Dict[str, Fabricator] = {}
-        tasks: Dict[str, Callable[[], Awaitable[Any]]] = {} 
+        tasks: Dict[str, Callable[[], Awaitable[Any]]] = {}
 
         for _, call in inspect.getmembers(self, predicate=inspect.ismethod):
-
             hook_name: str = call.__name__
             not_internal = hook_name.startswith("__") is False
             not_reserved = hook_name not in reserved
             is_endpoint = hasattr(call, "as_endpoint")
             is_task = hasattr(call, "as_task")
 
-
             if not_internal and not_reserved and is_endpoint:
-
-                
                 methods: List[str] = call.methods
                 path: str = call.path
 
@@ -693,35 +599,34 @@ class Service(Generic[E]):
                 for middleware_operator in self.middleware:
                     if path not in self._reserved_urls:
                         call = middleware_operator.wrap(call)
-                
-                endpoints.update({
-                    f'{method}_{path}': call for method in methods
-                })
 
-                self._handlers.update({
-                    f'{method}_{path}': handler for method in methods
-                })
+                endpoints.update({f"{method}_{path}": call for method in methods})
+
+                self._handlers.update(
+                    {f"{method}_{path}": handler for method in methods}
+                )
 
                 call_params = inspect.signature(handler).parameters
 
                 required_params = [
-                    (key, value.annotation) for key, value in call_params.items() if value.default == inspect._empty
+                    (key, value.annotation)
+                    for key, value in call_params.items()
+                    if value.default == inspect._empty
                 ]
 
                 optional_params = {
-                    key: get_args(value.annotation) for key, value in call_params.items() if value.default != inspect._empty
+                    key: get_args(value.annotation)
+                    for key, value in call_params.items()
+                    if value.default != inspect._empty
                 }
 
-                fabricator = Fabricator(
-                    required_params,
-                    optional_params
-                )
+                fabricator = Fabricator(required_params, optional_params)
 
-                return_type = get_type_hints(handler).get('return')
+                return_type = get_type_hints(handler).get("return")
                 response_types = get_args(return_type)
 
                 responses: Dict[int, Any] = {}
-                
+
                 if (
                     len(response_types) > 1
                     and inspect.isclass(response_types[0])
@@ -735,7 +640,10 @@ class Service(Generic[E]):
                 elif len(response_types) == 1:
                     responses[200] = response_types[0]
 
-                elif len(response_types) > 0 and response_types[0] in BaseModel.__subclasses__():
+                elif (
+                    len(response_types) > 0
+                    and response_types[0] in BaseModel.__subclasses__()
+                ):
                     model = response_types[0]
                     responses[200] = model
 
@@ -745,47 +653,45 @@ class Service(Generic[E]):
                 if isinstance(handler.responses, dict):
                     responses.update(handler.responses)
 
-                additional_docs: Dict[   
-                    Literal[
-                        'docs_description',
-                        'docs_url'
-                    ], 
-                    str
-                ] = {}
+                additional_docs: Dict[Literal["docs_description", "docs_url"], str] = {}
 
                 if isinstance(handler.additional_docs, dict):
                     additional_docs = handler.additional_docs
 
                 method_metadata: Dict[
                     Literal[
-                        "GET", 
-                        "HEAD", 
-                        "OPTIONS", 
-                        "POST", "PUT", 
-                        "PATCH", 
-                        "DELETE", 
+                        "GET",
+                        "HEAD",
+                        "OPTIONS",
+                        "POST",
+                        "PUT",
+                        "PATCH",
+                        "DELETE",
                         "TRACE",
                     ],
                     Dict[
                         Literal[
-                            'name',
-                            'tags',
-                            'description',
-                            'summary',
-                            'docs_url',
-                            'docs_description',
-                            'depreciated',
+                            "name",
+                            "tags",
+                            "description",
+                            "summary",
+                            "docs_url",
+                            "docs_description",
+                            "depreciated",
                         ],
-                        str | List[str] | bool
-                    ]
+                        str | List[str] | bool,
+                    ],
                 ] = handler.method_metadata
 
                 call_response_headers = dict(handler.response_headers)
 
-                self._response_headers.update({
-                    f'{method}_{path}': dict(call_response_headers) for method in methods
-                })
-                
+                self._response_headers.update(
+                    {
+                        f"{method}_{path}": dict(call_response_headers)
+                        for method in methods
+                    }
+                )
+
                 if path not in self._reserved_urls:
                     self._endpoint_docs[path] = ParsedEndpoint(
                         path=path,
@@ -797,14 +703,20 @@ class Service(Generic[E]):
                                 method: ParsedOperationMetadata(
                                     group_name=self._service_name,
                                     name=handler.__name__,
-                                    tags=method_metadata[method].get('tags'),
-                                    description=method_metadata[method].get('description'),
-                                    docs_description=additional_docs.get('docs_description'),
-                                    docs_url=additional_docs.get('docs_url'),
-                                    deprecated=method_metadata[method].get('depreciated')
-
-                                ) for method in methods
-                            }
+                                    tags=method_metadata[method].get("tags"),
+                                    description=method_metadata[method].get(
+                                        "description"
+                                    ),
+                                    docs_description=additional_docs.get(
+                                        "docs_description"
+                                    ),
+                                    docs_url=additional_docs.get("docs_url"),
+                                    deprecated=method_metadata[method].get(
+                                        "depreciated"
+                                    ),
+                                )
+                                for method in methods
+                            },
                         ),
                         responses=responses,
                         response_headers=call_response_headers,
@@ -812,11 +724,11 @@ class Service(Generic[E]):
                         parameters=fabricator["parameters"],
                         query=fabricator["query"],
                         body=fabricator["body"],
-                        required=fabricator.required_params
+                        required=fabricator.required_params,
                     )
-                    
+
                 for method in methods:
-                    endpoint_method_key = f'{method}_{path}'
+                    endpoint_method_key = f"{method}_{path}"
                     fabricators[endpoint_method_key] = fabricator
 
                 self._tcp._supported_handlers[path] = {
@@ -827,76 +739,63 @@ class Service(Generic[E]):
                 hook_name = handler.__name__
                 tasks[hook_name] = handler
 
-        return (
-            endpoints,
-            tasks,
-            fabricators
-        )
+        return (endpoints, tasks, fabricators)
 
-    async def run_forever(self):
-        loop = asyncio.get_event_loop()
-        self._waiter = loop.create_future()
-
-        try:
-            await self.logger.log(
-                Event(message=f'Running on - {self.host}:{self.port}'),
-                template="{timestamp} - {level} - {thread_id} - {message}",
-            )
-
-            await self._waiter
-
-        except asyncio.CancelledError:
-            pass
-
-    async def start_server(
-        self, 
-        cert_path: Optional[str] = None, 
+    async def run(
+        self,
+        cert_path: Optional[str] = None,
         key_path: Optional[str] = None,
-        worker_socket: Optional[socket.socket]=None
-    ):  
-        loop = asyncio.get_event_loop()
+        worker_socket: Optional[socket.socket] = None,
+    ):
+        self._loop = asyncio.get_event_loop()
         for signame in ("SIGINT", "SIGTERM", "SIG_IGN"):
-            loop.add_signal_handler(
-                getattr(signal, signame),
-                lambda signame=signame: handle_worker_loop_stop(signame, self, loop),
+            self._loop.add_signal_handler(
+                getattr(
+                    signal,
+                    signame,
+                ),
+                self.abort,
             )
+
+        self._is_worker = worker_socket is not None
 
         async with self.logger.context(
             name=self.name,
-            template="{timestamp} - {level} - {thread_id} - {message}"
+            template="{timestamp} - {level} - {thread_id} - {message}",
         ) as ctx:
-            
-            await ctx.log(Event(
-                message='Starting server'
-            ))
+            if worker_socket is None:
+                await ctx.log(Event(message="Startiworker_socketng server"))
 
-            await asyncio.gather(*[
-                middleware.__setup__() for middleware in self.middleware
-            ])
+            await asyncio.gather(
+                *[middleware.__setup__() for middleware in self.middleware]
+            )
 
-            await asyncio.gather(*[
-                middleware.__setup__() for middleware in self._group_middleware
-            ])
+            await asyncio.gather(
+                *[middleware.__setup__() for middleware in self._group_middleware]
+            )
 
             pool: List[asyncio.Future] = []
 
             loop = asyncio.get_event_loop()
 
-            stdin_fileno: Optional[int]
             try:
                 stdin_fileno = sys.stdin.fileno()
-            except OSError:
+            # The `sys.stdin` can be `None`, see https://docs.python.org/3/library/sys.html#sys.__stdin__.
+            except (AttributeError, OSError):
                 stdin_fileno = None
 
-            if self.engine_type == "process" and worker_socket is None and self._workers > 1:
-
-                await ctx.log(Event(
-                    message=f'Initializing - {self._workers} - workers'
-                ))
+            if (
+                self.engine_type == "process"
+                and worker_socket is None
+                and self._workers > 1
+            ):
+                await ctx.log(
+                    Event(message=f"Initializing - {self._workers} - workers")
+                )
 
                 engine = ProcessPoolExecutor(
-                    max_workers=self._workers, 
-                    mp_context=mp.get_context(method="spawn"),
+                    max_workers=self._workers,
+                    mp_context=spawn,
                 )
 
                 tcp_socket = bind_tcp_socket(self.host, self.port)
@@ -906,23 +805,15 @@ class Service(Generic[E]):
                     "stdin_fileno": stdin_fileno,
                     "cert_path": cert_path,
                     "key_path": key_path,
+                    "log_level": self._logging_config.level.name.lower(),
                 }
-
-                for signame in ("SIGINT", "SIGTERM", "SIG_IGN"):
-                    loop.add_signal_handler(
-                        getattr(signal, signame),
-                        lambda signame=signame: handle_loop_stop(
-                            signame, 
-                            engine
-                        ),
-                    )
 
                 for _ in range(self._workers):
                     connection = MercurySyncHTTPConnection(
                         self.host,
                         self.port,
                         self._instance_id,
-                        self._env,
+                        self.env,
                     )
 
                     service_name = self.__class__.__name__
@@ -934,72 +825,93 @@ class Service(Generic[E]):
                             connection,
                             service_name,
                             self.env,
-                            self._env,
                             self.groups,
                             config=config,
                         ),
                     )
 
                     pool.append(service_worker)
-                
-                await asyncio.gather(*pool)
+
+                try:
+                    await asyncio.gather(*pool)
+
+                except (
+                    asyncio.CancelledError,
+                    BrokenPipeError,
+                    OSError,
+                    KeyboardInterrupt,
+                    Exception,
+                ):
+                    pass
+
+                await self.close()
 
             else:
-
                 await self._tcp.connect_async(
-                    cert_path=cert_path,
-                    key_path=key_path,
-                    worker_socket=worker_socket
+                    cert_path=cert_path, key_path=key_path, worker_socket=worker_socket
                 )
 
                 self.start_tasks()
 
-            if worker_socket:
-                await ctx.log(Event(
-                    message=f'Starting worker on - {self.host}:{self.port}'
-                ))
+                if worker_socket:
+                    await ctx.log(
+                        Event(message=f"Worker running on - {self.host}:{self.port}")
+                    )
+
+                self._waiter = self._loop.create_future()
+                try:
+                    if self._is_worker is False:
+                        await self.logger.log(
+                            Event(message=f"Main running on - {self.host}:{self.port}"),
+                            template="{timestamp} - {level} - {thread_id} - {message}",
+                        )
+
+                    await self._waiter
+
+                except Exception:
+                    pass
+
+                await self.close()
 
     def start_tasks(self):
         self.tasks.start_cleanup()
         for task in self.tasks.all_tasks():
-
             task.call = task.call.__get__(self, self.__class__)
             setattr(self, task.name, task.call)
 
-            if task.trigger == 'ON_START':
-                self.tasks.run(task.name)
+            if task.trigger == "ON_START":
+                self.tasks.start(task.name)
 
     async def close(self) -> None:
-
         async with self.logger.context(
-            name=self.name,
-            template="{timestamp} - {level} - {thread_id} - {message}"
+            name=self.name, template="{timestamp} - {level} - {thread_id} - {message}"
         ) as ctx:
-            if self._engine:
-                await ctx.log(Event(message=f'Shutting down - {self._workers} - workers'))
+            if self._engine and not self._is_worker:
+                await ctx.log(
+                    Event(message=f"Shutting down - {self._workers} - workers")
+                )
                 self._engine.shutdown(cancel_futures=True)
 
-            await ctx.log(Event(message=f'Shutting down tcp at - {self.host}:{self.port}'))
+            await ctx.log(
+                Event(message=f"Shutting down tcp at - {self.host}:{self.port}")
+            )
             await self._tcp.close()
 
             if self._waiter:
                 self._waiter.set_result(None)
-                
-        await asyncio.gather(*[
-            middleware.close() for middleware in self.middleware
-        ])
 
-        await asyncio.gather(*[
-            middleware.close() for middleware in self._group_middleware
-        ])
+        await asyncio.gather(*[middleware.close() for middleware in self.middleware])
 
-        await ctx.log(Event(message='Graceful shutdown complete. Goodbye!'))
+        await asyncio.gather(
+            *[middleware.close() for middleware in self._group_middleware]
+        )
+
+        if not self._is_worker:
+            await ctx.log(Event(message="Graceful shutdown complete. Goodbye!"))
+
         await self.logger.close()
 
-    def abort(self):
-
-        print('Aborted!')
-        
+    def abort(self, *args):
         if self._engine:
             self._engine.shutdown(cancel_futures=True)
 

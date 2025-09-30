@@ -2,6 +2,8 @@ import asyncio
 
 from mkfst import (
     Service,
+    endpoint,
+    Env,
 )
 from pydantic import BaseModel
 
@@ -11,17 +13,23 @@ class Greeting(BaseModel):
 
 
 class TestService(Service):
-    pass
-    
-if __name__ == '__main__':
+    @endpoint("/")
+    async def get_service(self) -> str:
+        return "Hello World"
+
+
+if __name__ == "__main__":
+
     async def run_server():
         server = TestService(
-            'localhost',
+            "localhost",
             6099,
+            log_level="error",
+            env=Env(
+                MERCURY_SYNC_ENABLE_REQUEST_CACHING=True,
+            ),
         )
 
-        await server.start_server()
-        await server.run_forever()
-
+        await server.run()
 
     asyncio.run(run_server())

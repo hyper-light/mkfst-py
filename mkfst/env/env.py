@@ -17,6 +17,7 @@ PrimaryType = Union[str, int, float, bytes, bool]
 class Env(BaseModel):
     MERCURY_SYNC_SERVER_URL: AnyHttpUrl | None = None
     MERCURY_SYNC_API_VERISON: StrictStr = "0.0.1"
+    MERCURY_SYNC_TASK_EXECUTOR_TYPE: Literal["thread", "process", "none"] = "process"
     MERCURY_SYNC_HTTP_CIRCUIT_BREAKER_REJECTION_SENSITIVITY: StrictFloat = 2
     MERCURY_SYNC_HTTP_CIRCUIT_BREAKER_FAILURE_WINDOW: StrictStr = "1m"
     MERCURY_SYNC_HTTP_CIRCUIT_BREAKER_FAILURE_THRESHOLD: Union[
@@ -47,7 +48,7 @@ class Env(BaseModel):
         "global",
         "ip-endpoint",
         "none",
-    ]="none"
+    ] = "none"
     MERCURY_SYNC_HTTP_RATE_LIMIT_DEFAULT_REJECT: StrictBool = True
     MERCURY_SYNC_USE_HTTP_MSYNC_ENCRYPTION: StrictBool = False
     MERCURY_SYNC_USE_HTTP_SERVER: StrictBool = True
@@ -62,12 +63,15 @@ class Env(BaseModel):
     MERCURY_SYNC_REQUEST_TIMEOUT: StrictStr = "30s"
     MERCURY_SYNC_LOG_LEVEL: StrictStr = "info"
     MERCURY_SYNC_TASK_RUNNER_MAX_THREADS: StrictInt = os.cpu_count()
+    MERCURY_SYNC_MAX_REQUEST_CACHE_SIZE: StrictInt = 100
+    MERCURY_SYNC_ENABLE_REQUEST_CACHING: StrictBool = False
 
     @classmethod
     def types_map(cls) -> Dict[str, Callable[[str], PrimaryType]]:
         return {
             "MERCURY_SYNC_SERVER_URL": str,
             "MERCURY_SYNC_API_VERISON": str,
+            "MERCURY_SYNC_TASK_EXECUTOR_TYPE": str,
             "MERCURY_SYNC_HTTP_CIRCUIT_BREAKER_REJECTION_SENSITIVITY": float,
             "MERCURY_SYNC_HTTP_CIRCUIT_BREAKER_FAILURE_WINDOW": str,
             "MERCURY_SYNC_HTTP_HANDLER_TIMEOUT": str,
@@ -102,5 +106,9 @@ class Env(BaseModel):
             "MERCURY_SYNC_LOGS_DIRECTORY": str,
             "MERCURY_SYNC_REQUEST_TIMEOUT": str,
             "MERCURY_SYNC_LOG_LEVEL": str,
-            'MERCURY_SYNC_TASK_RUNNER_MAX_THREADS': int
+            "MERCURY_SYNC_TASK_RUNNER_MAX_THREADS": int,
+            "MERCURY_SYNC_MAX_REQUEST_CACHE_SIZE": int,
+            "MERCURY_SYNC_ENABLE_REQUEST_CACHING": lambda value: True
+            if value.lower() == "true"
+            else False,
         }

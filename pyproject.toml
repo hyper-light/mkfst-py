@@ -1,0 +1,50 @@
+# pyproject.toml
+
+[build-system]
+requires      = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mkfst"
+version = "0.4.0"
+requires-python = ">=3.11"
+description = "MKFST (Make Fast) is a high-performance, async, non-ASGI, Python HTTP webserver framework"
+readme = "README.md"
+authors = [{ name = "Ada Lundhe", email = "adalundhe@lundhe.audio" }]
+license = { file = "LICENSE" }
+classifiers = [
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+]
+keywords = [
+        "pypi",
+        "http",
+        "rest",
+        "framework",
+        "web",
+        "python",
+        "api",
+]
+dependencies = [
+    "psutil",
+    "uvloop",
+    "pydantic",
+    "zstandard",
+    "cryptography",
+    "python-dotenv",
+    "orjson",
+    "msgspec",
+]
+
+
+[project.urls]
+Homepage = "https://github.com/hyper-light/mkfst-py"
+
+[tool.setuptools.packages]
+find = {}  # Scanning implicit namespaces is active by default
+
+[tool.ruff]
+target-version = "py311"
