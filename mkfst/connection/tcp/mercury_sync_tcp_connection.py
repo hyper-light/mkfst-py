@@ -220,7 +220,7 @@ class MercurySyncTCPConnection:
             try:
                 await self._sleep_task
 
-            except Exception:
+            except (Exception, asyncio.CancelledError, KeyboardInterrupt):
                 pass
 
             for pending in list(self._pending_responses):
