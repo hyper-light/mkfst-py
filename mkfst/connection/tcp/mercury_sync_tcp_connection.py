@@ -71,7 +71,6 @@ class MercurySyncTCPConnection:
         self._max_concurrency = env.MERCURY_SYNC_MAX_CONCURRENCY
         self._tcp_connect_retries = env.MERCURY_SYNC_TCP_CONNECT_RETRIES
 
-
     def connect(
         self,
         cert_path: Optional[str] = None,
@@ -218,7 +217,11 @@ class MercurySyncTCPConnection:
                 asyncio.sleep(self._cleanup_interval)
             )
 
-            await self._sleep_task
+            try:
+                await self._sleep_task
+
+            except Exception:
+                pass
 
             for pending in list(self._pending_responses):
                 if pending.done() or pending.cancelled():
@@ -266,7 +269,7 @@ class MercurySyncTCPConnection:
                 asyncio.InvalidStateError,
                 asyncio.TimeoutError,
                 Exception,
-                socket.error
+                socket.error,
             ):
                 pass
 
@@ -278,6 +281,6 @@ class MercurySyncTCPConnection:
                 asyncio.InvalidStateError,
                 asyncio.TimeoutError,
                 Exception,
-                socket.error
+                socket.error,
             ):
                 pass
