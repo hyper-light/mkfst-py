@@ -261,11 +261,11 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
 
             handler_key = f"{request_method}_{request_path}"
 
-            cache_key = handler_key.encode() + request_data
+            cache_key: int | None = None
+            if self._request_caching_enabled:
+                cache_key = hash(data)
 
-            if self._request_caching_enabled and (
-                cached_response := self._cache.get(cache_key)
-            ):
+            if cache_key and (cached_response := self._cache.get(cache_key)):
                 response_data, status_code, _ = cached_response
 
                 if self._use_encryption is False:

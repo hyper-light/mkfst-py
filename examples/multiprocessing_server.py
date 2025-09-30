@@ -28,7 +28,6 @@ if __name__ == "__main__":
             env=Env(
                 MERCURY_SYNC_ENABLE_REQUEST_CACHING=True,
             ),
-            workers=12,
         )
 
         await server.run()
