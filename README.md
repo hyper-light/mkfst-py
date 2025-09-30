@@ -1,6 +1,6 @@
 # <b> mkfst-py </b>
-[![PyPI version](https://img.shields.io/pypi/v/mkfst-py?color=blue)](https://pypi.org/project/mkfst/)
-[![License](https://img.shields.io/github/license/hyper-light/mkfst)](https://github.com/hyper-light/mkfst-py/blob/main/LICENSE)
+[![PyPI version](https://img.shields.io/pypi/v/mkfst?color=blue)](https://pypi.org/project/mkfst/)
+[![License](https://img.shields.io/github/license/hyper-light/mkfst-py)](https://github.com/hyper-light/mkfst-py/blob/main/LICENSE)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](https://github.com/hyper-light/mkfst-py/blob/main/CODE_OF_CONDUCT.md)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/mkfst?color=red)](https://pypi.org/project/mkfst/)
 
