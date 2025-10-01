@@ -319,10 +319,65 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         )
                     )
 
-            try:
-                if handler is None or fabricator is None:
-                    raise KeyError("Route not found.")
+            if handler is None:
+                async with self._backoff_sem:
+                    data.clear()
 
+                    not_found_response = HTTPResponse(
+                        path=request_path,
+                        status=404,
+                        error="Not Found",
+                        protocol=request_version,
+                        method=request_method,
+                    )
+
+                    await ctx.log(
+                        Response(
+                            path=request_path,
+                            method=request_method,
+                            level=LogLevel.ERROR,
+                            ip_address=ip_address,
+                            error="Failed to match route",
+                            status=404,
+                        ),
+                        template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} {error}",
+                    )
+
+                    if transport.is_closing() is False:
+                        transport.write(not_found_response.prepare_response())
+
+                    return
+
+            elif fabricator is None:
+                async with self._backoff_sem:
+                    data.clear()
+
+                    method_not_allowed_response = HTTPResponse(
+                        path=request_path,
+                        status=405,
+                        error="Method Not Allowed",
+                        protocol=request_version,
+                        method=request_method,
+                    )
+
+                    await ctx.log(
+                        Response(
+                            path=request_path,
+                            method=request_method,
+                            level=LogLevel.ERROR,
+                            ip_address=ip_address,
+                            error="Failed to match allowed methods",
+                            status=405,
+                        ),
+                        template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} {error}",
+                    )
+
+                    if transport.is_closing() is False:
+                        transport.write(method_not_allowed_response.prepare_response())
+
+                    return
+
+            try:
                 if self._rate_limiting_enabled:
                     await ctx.log(
                         Event(
@@ -656,60 +711,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     )
 
                 transport.write(response_data)
-
-            except KeyError:
-                async with self._backoff_sem:
-                    data.clear()
-
-                    if self._supported_handlers.get(request_path) is None:
-                        not_found_response = HTTPResponse(
-                            path=request_path,
-                            status=404,
-                            error="Not Found",
-                            protocol=request_version,
-                            method=request_method,
-                        )
-
-                        await ctx.log(
-                            Response(
-                                path=request_path,
-                                method=request_method,
-                                level=LogLevel.ERROR,
-                                ip_address=ip_address,
-                                error="Failed to match route",
-                                status=404,
-                            ),
-                            template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} {error}",
-                        )
-
-                        if transport.is_closing() is False:
-                            transport.write(not_found_response.prepare_response())
-
-                    else:
-                        method_not_allowed_response = HTTPResponse(
-                            path=request_path,
-                            status=405,
-                            error="Method Not Allowed",
-                            protocol=request_version,
-                            method=request_method,
-                        )
-
-                        await ctx.log(
-                            Response(
-                                path=request_path,
-                                method=request_method,
-                                level=LogLevel.ERROR,
-                                ip_address=ip_address,
-                                error="Failed to match allowed methods",
-                                status=405,
-                            ),
-                            template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} {error}",
-                        )
-
-                        if transport.is_closing() is False:
-                            transport.write(
-                                method_not_allowed_response.prepare_response()
-                            )
 
             except Exception as e:
                 async with self._backoff_sem:
