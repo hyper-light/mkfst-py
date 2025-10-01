@@ -215,6 +215,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 request_path = request_path.decode()
 
                 request_data = bytes(data)
+                data.clear()
 
                 await ctx.log(
                     Event(
@@ -236,9 +237,8 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
 
             except Exception as e:
                 async with self._backoff_sem:
-                    status = 400
-
                     data.clear()
+                    status = 400
 
                     await ctx.log(
                         Response(
@@ -269,8 +269,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
 
             if cache_key and (cached_response := self._cache.get(cache_key)):
                 response_data, status_code, _ = cached_response
-
-                data.clear()
 
                 if self._use_encryption is False:
                     await ctx.log(
@@ -325,8 +323,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
 
             if handler is None:
                 async with self._backoff_sem:
-                    data.clear()
-
                     not_found_response = HTTPResponse(
                         path=request_path,
                         status=404,
@@ -354,8 +350,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
 
             elif fabricator is None:
                 async with self._backoff_sem:
-                    data.clear()
-
                     method_not_allowed_response = HTTPResponse(
                         path=request_path,
                         status=405,
@@ -406,8 +400,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
 
                     if rejected and transport.is_closing() is False:
                         async with self._backoff_sem:
-                            data.clear()
-
                             await ctx.log(
                                 Response(
                                     path=request_path,
@@ -435,8 +427,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                             return
 
                     elif rejected:
-                        data.clear()
-
                         await ctx.log(
                             Response(
                                 path=request_path,
@@ -718,13 +708,10 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} - {status}",
                     )
 
-                data.clear()
                 transport.write(response_data)
 
             except Exception as e:
                 async with self._backoff_sem:
-                    data.clear()
-
                     await ctx.log(
                         Response(
                             path=request_path,

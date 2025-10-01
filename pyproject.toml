@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mkfst"
-version = "0.4.10"
+version = "0.4.11"
 requires-python = ">=3.11"
 description = "MKFST (Make Fast) is a high-performance, async, non-ASGI, Python HTTP webserver framework"
 readme = "README.md"
