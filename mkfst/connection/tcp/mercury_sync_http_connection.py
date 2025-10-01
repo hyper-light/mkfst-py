@@ -297,7 +297,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     )
                 )
 
-            except KeyError:
+            except Exception:
                 # Fallback to Trie router
                 if match := self.routes.match(request_path):
                     methods_conifg: Dict[
