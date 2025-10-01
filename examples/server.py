@@ -3,12 +3,7 @@ import datetime
 
 from pydantic import BaseModel, StrictStr
 
-from mkfst import (
-    HTML,
-    Group,
-    Service,
-    endpoint,
-)
+from mkfst import HTML, Group, Service, endpoint
 
 
 class MetadataV2(BaseModel):
@@ -27,42 +22,41 @@ class User(BaseModel):
 
 
 class UsersApiV1(Group):
-
-    @endpoint('/get')
+    @endpoint("/get")
     async def get_service(self) -> User:
         return User(
-            username='johnnyj',
-            password='Password12345',
+            username="johnnyj",
+            password="Password12345",
             metadata=MetadataV1(
                 created=datetime.datetime.now(),
                 updated=datetime.datetime.now(),
-            )
+            ),
         )
-    
-class UsersApiV2(Group):
 
-    @endpoint('/get')
+
+class UsersApiV2(Group):
+    @endpoint("/get")
     async def get_service(self) -> User:
         return User(
-            username='johnnyj',
-            password='Password12345',
-            metadata=MetadataV2(
-                accessed=datetime.datetime.now()
-            )
+            username="johnnyj",
+            password="Password12345",
+            metadata=MetadataV2(accessed=datetime.datetime.now()),
         )
-    
+
+
 class ApiV1(Group):
     pass
 
+
 class ApiV2(Group):
     pass
-    
+
 
 class TestService(Service):
-    
-    @endpoint('/home')
+    @endpoint("/home")
     async def get_home(self) -> HTML:
-        return HTML(content="""
+        return HTML(
+            content="""
         <!DOCTYPE html>
         <html>
             <head>
@@ -72,27 +66,18 @@ class TestService(Service):
                 <h1>Hello from home!</h1>
             </body>
         </html>
-        """)
-        
+        """
+        )
+
 
 async def run_server():
     server = TestService(
-        'localhost',
+        "localhost",
         5019,
         groups=[
-            ApiV1(
-                '/api/v1',
-                groups=[
-                    UsersApiV1('/users')
-                ]
-            ),
-            ApiV2(
-                '/api/v2',
-                groups=[
-                    UsersApiV2('/users')
-                ]
-            )
-        ]
+            ApiV1("/api/v1", groups=[UsersApiV1("/users")]),
+            ApiV2("/api/v2", groups=[UsersApiV2("/users")]),
+        ],
     )
 
     await server.start_server()

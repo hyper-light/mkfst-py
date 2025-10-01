@@ -7,6 +7,8 @@ from typing import (
     Literal,
     Tuple,
     Type,
+    get_origin,
+    get_args,
 )
 
 import orjson
@@ -15,6 +17,9 @@ from pydantic import BaseModel, ValidationError
 from mkfst.models import HTML, Body, Cookies, FileUpload, Headers, Parameters, Query
 
 KeyType = Literal["positional", "keyword"]
+Data = BaseModel | Body | HTML | FileUpload | str | bytes | list | dict
+Json = dict | list
+Raw = str | bytes
 
 
 class Fabricator:
@@ -86,6 +91,8 @@ class Fabricator:
             "file",
             "html",
             "model",
+            "json",
+            "body",
             "raw",
         ] = "model"
 
@@ -166,9 +173,7 @@ class Fabricator:
         self.params: Parameters | None = None
         self.query: Query | None = None
         self.cookies: Cookies | None = None
-        self.body: (
-            BaseModel | Body | HTML | FileUpload | str | bytes | list | dict
-        ) | None = None
+        self.body: Data | None = None
 
     def __getitem__(
         self,
@@ -198,7 +203,7 @@ class Fabricator:
         annotation: Type[Headers]
         | Type[Parameters]
         | Type[Query]
-        | Type[BaseModel]
+        | Type[Data]
         | Type[Body]
         | Type[HTML]
         | Type[FileUpload]
@@ -264,7 +269,7 @@ class Fabricator:
             param_type = "body"
             self._body_type = "html"
 
-        elif annotation in BaseModel.__subclasses__():
+        elif annotation in BaseModel.__subclasses__() and annotation != Body:
             self._params["body"] = (
                 annotation,
                 position,
@@ -276,9 +281,32 @@ class Fabricator:
             param_type = "body"
             self._body_type = "model"
 
+        elif annotation == Body:
+            self._params["body"] = (
+                annotation,
+                position,
+            )
+
+            self._body_key = position if position is not None else name
+            self._body_key_type = "positional" if position is not None else "keyword"
+            param_type = "body"
+            self._body_type = "body"
+
+        elif annotation in get_args(Json) or get_origin(annotation) in get_args(Json):
+            self._params["body"] = (
+                annotation,
+                position,
+            )
+
+            self._body_key = position if position is not None else name
+            self._body_key_type = "positional" if position is not None else "keyword"
+
+            param_type = "body"
+            self._body_type = "json"
+
         else:
             self._params["body"] = (
-                Body,
+                annotation,
                 position,
             )
 
@@ -313,26 +341,12 @@ class Fabricator:
         has_middleware: bool = False,
     ):
         positional_args: List[
-            Headers
-            | Parameters
-            | Query
-            | BaseModel
-            | Body
-            | HTML
-            | FileUpload
-            | Cookies,
+            Headers | Parameters | Query | Data | Body | HTML | FileUpload | Cookies,
         ] = []
 
         keyword_args: Dict[
             str,
-            Headers
-            | Parameters
-            | Query
-            | BaseModel
-            | Body
-            | HTML
-            | FileUpload
-            | Cookies,
+            Headers | Parameters | Query | Data | Body | HTML | FileUpload | Cookies,
         ] = {}
 
         if self._args_count == 0:
@@ -493,7 +507,7 @@ class Fabricator:
             )
 
         try:
-            match self._body_key:
+            match self._body_type:
                 case "file":
                     encoding = request_headers.get("content-encoding")
 
@@ -507,10 +521,16 @@ class Fabricator:
                     body = annotation(content=request_data.strip().decode())
 
                 case "model":
-                    body = annotation(**orjson.loads())
+                    body = annotation(**orjson.loads(request_data))
+
+                case "json":
+                    body = orjson.loads(request_data)
+
+                case "body":
+                    body = Body(content=request_data.strip())
 
                 case _:
-                    body = Body(content=request_data.strip())
+                    body = request_data.strip()
 
             return (
                 body,
