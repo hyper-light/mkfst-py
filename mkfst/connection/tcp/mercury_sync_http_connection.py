@@ -238,6 +238,8 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 async with self._backoff_sem:
                     status = 400
 
+                    data.clear()
+
                     await ctx.log(
                         Response(
                             level=LogLevel.ERROR,
@@ -288,6 +290,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
 
             try:
                 handler = self.events[handler_key]
+                fabricator = self.fabricators[handler_key]
 
                 await ctx.log(
                     Event(
@@ -303,11 +306,11 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         str, Dict[Literal["model", "handler"], Handler | Any]
                     ] = match.anything
 
-                    resolved_route = match.route
+                    request_path = match.route
                     handler = methods_conifg.get(request_method)
-                    handler_key = f"{request_method}_{resolved_route}"
-                    fabricator = self.fabricators.get(handler_key)
+                    handler_key = f"{request_method}_{request_path}"
                     request_params = match.params
+                    fabricator = self.fabricators.get(handler_key)
 
                     await ctx.log(
                         Event(
@@ -315,32 +318,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                             message=f"Request - {request_method} {request_path}:{ip_address} - successful partial match for route",
                         )
                     )
-
-                else:
-                    async with self._backoff_sem:
-                        status = 404
-
-                        await ctx.log(
-                            Response(
-                                level=LogLevel.ERROR,
-                                ip_address=ip_address,
-                                error=f"{status}: Not found - {request_path}",
-                                status=status,
-                            ),
-                            template="{timestamp} - {level} - {thread_id} - {ip_address}:{status}:{error}",
-                        )
-
-                        if transport.is_closing() is False:
-                            server_error_respnse = HTTPResponse(
-                                status=404,
-                                data=f"{status}: Not found - {request_path}",
-                                error=f"{status}: Not found - {request_path}",
-                                protocol="HTTP/1.1",
-                            )
-
-                            transport.write(server_error_respnse.prepare_response())
-
-                    return
 
             try:
                 if handler is None or fabricator is None:
@@ -682,6 +659,8 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
 
             except KeyError:
                 async with self._backoff_sem:
+                    data.clear()
+
                     if self._supported_handlers.get(request_path) is None:
                         not_found_response = HTTPResponse(
                             path=request_path,
@@ -706,10 +685,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         if transport.is_closing() is False:
                             transport.write(not_found_response.prepare_response())
 
-                    elif (
-                        self._supported_handlers[request_path].get(request_method)
-                        is None
-                    ):
+                    else:
                         method_not_allowed_response = HTTPResponse(
                             path=request_path,
                             status=405,
@@ -737,6 +713,8 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
 
             except Exception as e:
                 async with self._backoff_sem:
+                    data.clear()
+
                     await ctx.log(
                         Response(
                             path=request_path,

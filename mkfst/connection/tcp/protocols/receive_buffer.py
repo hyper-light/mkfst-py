@@ -110,3 +110,6 @@ class ReceiveBuffer:
             return self._data[0] < 0x21
         except IndexError:
             return False
+
+    def clear(self):
+        self._data.clear()
