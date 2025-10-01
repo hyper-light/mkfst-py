@@ -288,7 +288,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
 
             try:
                 handler = self.events[handler_key]
-                fabricator = self.fabricators[handler_key]
 
                 await ctx.log(
                     Event(
@@ -297,7 +296,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     )
                 )
 
-            except Exception:
+            except KeyError:
                 # Fallback to Trie router
                 if match := self.routes.match(request_path):
                     methods_conifg: Dict[
@@ -308,7 +307,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     handler = methods_conifg.get(request_method)
                     handler_key = f"{request_method}_{resolved_route}"
                     request_params = match.params
-                    fabricator = self.fabricators[handler_key]
 
                     await ctx.log(
                         Event(
@@ -346,6 +344,8 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
             try:
                 if handler is None:
                     raise KeyError("Route not found.")
+
+                fabricator = self.fabricators[handler_key]
 
                 if self._rate_limiting_enabled:
                     await ctx.log(
