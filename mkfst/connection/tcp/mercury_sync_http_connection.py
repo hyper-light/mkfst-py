@@ -192,7 +192,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     raise Exception("Bad request line")
 
                 elif lines is None:
-                    return None
+                    raise Exception("No lines received")
 
                 if not lines:
                     raise Exception("No lines received")
@@ -270,6 +270,8 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
             if cache_key and (cached_response := self._cache.get(cache_key)):
                 response_data, status_code, _ = cached_response
 
+                data.clear()
+
                 if self._use_encryption is False:
                     await ctx.log(
                         Response(
@@ -281,7 +283,9 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} - {status}",
                     )
 
-                transport.write(response_data)
+                if not transport.is_closing():
+                    transport.write(response_data)
+
                 return
 
             handler: Handler | None = None
@@ -402,6 +406,8 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
 
                     if rejected and transport.is_closing() is False:
                         async with self._backoff_sem:
+                            data.clear()
+
                             await ctx.log(
                                 Response(
                                     path=request_path,
@@ -429,6 +435,8 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                             return
 
                     elif rejected:
+                        data.clear()
+
                         await ctx.log(
                             Response(
                                 path=request_path,
@@ -710,6 +718,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} - {status}",
                     )
 
+                data.clear()
                 transport.write(response_data)
 
             except Exception as e:
