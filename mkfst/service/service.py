@@ -897,7 +897,7 @@ class Service(Generic[E]):
             )
             await self._tcp.close()
 
-            if self._waiter:
+            if self._waiter and not self._waiter.done():
                 self._waiter.set_result(None)
 
         await asyncio.gather(*[middleware.close() for middleware in self.middleware])
