@@ -1,18 +1,23 @@
-from .cors import Cors
-from .crsf import CRSF
+from .cors import Cors as Cors
+from .crsf import CRSF as CRSF
 
-from .circuit_breaker import CircuitBreaker
+from .circuit_breaker import CircuitBreaker as CircuitBreaker
 
 from .compressor import (
-    BidirectionalGZipCompressor,
-    BidirectionalZStandardCompressor,
-    GZipCompressor,
-    ZStandardCompressor
+    BidirectionalGZipCompressor as BidirectionalGZipCompressor,
+    BidirectionalZStandardCompressor as BidirectionalZStandardCompressor,
+    GZipCompressor as GZipCompressor,
+    ZStandardCompressor as ZStandardCompressor,
+)
+
+from .connection import (
+    HTTPSRedirect as HTTPSRedirect,
+    TrustedHost as TrustedHost,
 )
 
 from .decompressor import (
-    BidirectionalGZipDecompressor,
-    BidirectionalZStandardDecompressor,
-    GZipDecompressor,
-    ZStandardDecompressor
+    BidirectionalGZipDecompressor as BidirectionalGZipDecompressor,
+    BidirectionalZStandardDecompressor as BidirectionalZStandardDecompressor,
+    GZipDecompressor as GZipDecompressor,
+    ZStandardDecompressor as ZStandardDecompressor,
 )

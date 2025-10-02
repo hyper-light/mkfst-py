@@ -65,6 +65,7 @@ class Env(BaseModel):
     MERCURY_SYNC_TASK_RUNNER_MAX_THREADS: StrictInt = os.cpu_count()
     MERCURY_SYNC_MAX_REQUEST_CACHE_SIZE: StrictInt = 100
     MERCURY_SYNC_ENABLE_REQUEST_CACHING: StrictBool = False
+    MERCURY_SYNC_VERIFY_SSL_CERT: Literal["REQUIRED", "OPTIONAL", "NONE"] = "REQUIRED"
 
     @classmethod
     def types_map(cls) -> Dict[str, Callable[[str], PrimaryType]]:
@@ -108,7 +109,5 @@ class Env(BaseModel):
             "MERCURY_SYNC_LOG_LEVEL": str,
             "MERCURY_SYNC_TASK_RUNNER_MAX_THREADS": int,
             "MERCURY_SYNC_MAX_REQUEST_CACHE_SIZE": int,
-            "MERCURY_SYNC_ENABLE_REQUEST_CACHING": lambda value: True
-            if value.lower() == "true"
-            else False,
+            "MERCURY_SYNC_ENABLE_REQUEST_CACHING": str,
         }

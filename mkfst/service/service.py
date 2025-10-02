@@ -88,17 +88,18 @@ async def run(
         server = service(
             tcp_connection.host,
             tcp_connection.port,
-            tcp_connection._client_cert_path,
-            tcp_connection._client_key_path,
+            upgrade_port=config.get("upgrade_port"),
+            cert_path=config.get("cert_path"),
+            key_path=config.get("key_path"),
             groups=groups,
             env=env,
             log_level=config.get("log_level", "info"),
+            middleware=config.get("middleware"),
         )
 
         await server.run(
-            cert_path=config.get("cert_path"),
-            key_path=config.get("key_path"),
             worker_socket=config.get("tcp_socket"),
+            upgrade_socket=config.get("upgrade_socket"),
         )
 
     except Exception:
@@ -180,6 +181,7 @@ class Service(Generic[E]):
         self,
         host: str,
         port: int,
+        upgrade_port: int | None = None,
         cert_path: Optional[str] = None,
         key_path: Optional[str] = None,
         workers: int = os.cpu_count(),
@@ -219,13 +221,6 @@ class Service(Generic[E]):
         )
 
         self._instance_id = random.randint(0, 2**16)
-        self._host_map: Dict[
-            str,
-            Dict[
-                MercurySyncHTTPConnection,
-                Tuple[str, int],
-            ],
-        ] = defaultdict(dict)
 
         if service_metadata is None:
             service_metadata = {}
@@ -253,6 +248,11 @@ class Service(Generic[E]):
 
         self.host = host
         self.port = port
+
+        self.upgrade_port: int | None = None
+        if upgrade_port and upgrade_port != port:
+            self.upgrade_port = upgrade_port
+
         self.cert_path = cert_path
         self.key_path = key_path
 
@@ -280,6 +280,7 @@ class Service(Generic[E]):
             self.host,
             self.port,
             self._instance_id,
+            upgrade_port=upgrade_port,
             env=self.env,
         )
 
@@ -743,8 +744,7 @@ class Service(Generic[E]):
 
     async def run(
         self,
-        cert_path: Optional[str] = None,
-        key_path: Optional[str] = None,
+        upgrade_socket: Optional[socket.socket] = None,
         worker_socket: Optional[socket.socket] = None,
     ):
         self._loop = asyncio.get_event_loop()
@@ -799,13 +799,19 @@ class Service(Generic[E]):
                 )
 
                 tcp_socket = bind_tcp_socket(self.host, self.port)
+                upgrade_socket: socket.socket | None = None
+                if self.upgrade_port and upgrade_socket is None:
+                    upgrade_socket = bind_tcp_socket(self.host, self.upgrade_port)
 
                 config = {
                     "tcp_socket": tcp_socket,
+                    "upgrade_socket": upgrade_socket,
                     "stdin_fileno": stdin_fileno,
-                    "cert_path": cert_path,
-                    "key_path": key_path,
+                    "cert_path": self.cert_path,
+                    "key_path": self.key_path,
                     "log_level": self._logging_config.level.name.lower(),
+                    "middleware": self.middleware,
+                    "upgrade_port": self.upgrade_port,
                 }
 
                 for _ in range(self._workers):
@@ -813,7 +819,8 @@ class Service(Generic[E]):
                         self.host,
                         self.port,
                         self._instance_id,
-                        self.env,
+                        upgrade_port=self.upgrade_port,
+                        env=self.env,
                     )
 
                     service_name = self.__class__.__name__
@@ -847,8 +854,14 @@ class Service(Generic[E]):
                 await self.close()
 
             else:
+                if self.upgrade_port and upgrade_socket is None:
+                    upgrade_socket = bind_tcp_socket(self.host, self.upgrade_port)
+
                 await self._tcp.connect_async(
-                    cert_path=cert_path, key_path=key_path, worker_socket=worker_socket
+                    cert_path=self.cert_path,
+                    key_path=self.key_path,
+                    worker_socket=worker_socket,
+                    upgrade_socket=upgrade_socket,
                 )
 
                 self.start_tasks()

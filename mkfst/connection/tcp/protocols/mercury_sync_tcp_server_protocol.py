@@ -66,7 +66,7 @@ class MercurySyncTCPServerProtocol(asyncio.Protocol):
 
         if exc is None:
             self.transport.close()
-            self._unset_keepalive_if_required()
+            # self._unset_keepalive_if_required()
 
         self.on_con_lost.set_result(True)
 
@@ -85,11 +85,11 @@ class MercurySyncTCPServerProtocol(asyncio.Protocol):
             return
 
         # Set a short Keep-Alive timeout.
-        self._unset_keepalive_if_required()
+        # self._unset_keepalive_if_required()
 
-        self.timeout_keep_alive_task = self.loop.call_later(
-            self.timeout_keep_alive, self.timeout_keep_alive_handler
-        )
+        # self.timeout_keep_alive_task = self.loop.call_later(
+        #     self.timeout_keep_alive, self.timeout_keep_alive_handler
+        # )
 
         # Unpause data reads if needed.
         self.flow.resume_reading()

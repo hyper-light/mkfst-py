@@ -61,53 +61,45 @@ class UnidirectionalWrapper(BaseWrapper):
         self.handler = handler
         self.wraps = isinstance(handler, BaseWrapper)
 
-        if self.handler.response_headers and self.response_headers:
-            self.handler.response_headers = {}
+        # if self.handler.response_headers and self.response_headers:
+        #     self.handler.response_headers = {}
 
         self.run: MiddlewareHandler | None = None
         self.middleware_type = middleware_type
 
     async def __call__(
-        self, 
+        self,
         context: ResponseContext | None = None,
         response: Any | None = None,
     ):
         if context is None:
-            raise Exception('Err. - Context is missing.')
-        
+            raise Exception("Err. - Context is missing.")
+
         if self.wraps and self.middleware_type == MiddlewareType.UNIDIRECTIONAL_AFTER:
             # Is wraps additional middleware so expect
             # a middleware response.
-            (
-                context, 
-                response
-            ) = await self.handler(
+            (context, response) = await self.handler(
                 context=context,
                 response=response,
             )
 
-
-            (
-                context,
-                response
-            ), _ = await self.run(
+            (context, response), _ = await self.run(
                 context=context,
                 response=response,
                 handler=self.handler,
             )
 
             return (
-                context, 
+                context,
                 response,
             )
 
-        elif self.wraps and self.middleware_type == MiddlewareType.UNIDIRECTIONAL_BEFORE:
+        elif (
+            self.wraps and self.middleware_type == MiddlewareType.UNIDIRECTIONAL_BEFORE
+        ):
             # Wraps a call and should be executed before.
-            
-            (
-                context, 
-                response
-            ), run_next = await self.run(
+
+            (context, response), run_next = await self.run(
                 context=context,
                 response=response,
                 handler=self.handler,
@@ -116,57 +108,42 @@ class UnidirectionalWrapper(BaseWrapper):
             if run_next is False:
                 return context, response
 
-            (
-                context,
-                response
-            ) = await self.handler(
+            (context, response) = await self.handler(
                 context=context,
                 response=response,
             )
 
             return (
-                context, 
+                context,
                 response,
             )
 
         elif self.middleware_type == MiddlewareType.UNIDIRECTIONAL_AFTER:
             # Wraps a call and should be executed after.
 
-            response = await self.handler(
-                *context.args,
-                **context.kwargs
-            )
+            response = await self.handler(*context.args, **context.kwargs)
 
-            (
-                context, 
-                response
-            ), _ = await self.run(
+            (context, response), _ = await self.run(
                 context=context,
                 response=response,
                 handler=self.handler,
             )
 
             return (
-                context, 
+                context,
                 response,
             )
-        
+
         else:
-            (
-                context, 
-                response
-            ), run_next = await self.run(
+            (context, response), run_next = await self.run(
                 context=context,
                 response=response,
                 handler=self.handler,
             )
 
-            response = await self.handler(
-                *context.args,
-                **context.kwargs
-            )
+            response = await self.handler(*context.args, **context.kwargs)
 
             return (
-                context, 
+                context,
                 response,
             )

@@ -34,13 +34,15 @@ class MercurySyncTCPConnection:
 
         self._client_transports: Dict[str, asyncio.Transport] = {}
         self._server: asyncio.Server = None
+        self._upgrade_server: asyncio.Server | None = None
         self._loop: Union[asyncio.AbstractEventLoop, None] = None
         self._waiters: Dict[str, Deque[asyncio.Future]] = defaultdict(deque)
         self._pending_responses: Deque[asyncio.Task] = deque()
         self._last_call: Deque[str] = deque()
 
         self._sent_values = deque()
-        self.server_socket = None
+        self.server_socket: socket.socket | None = None
+        self.upgrade_socket: socket.socket | None = None
         self._stream = False
 
         self._client_key_path: Union[str, None] = None
@@ -64,69 +66,21 @@ class MercurySyncTCPConnection:
 
         self._max_concurrency = env.MERCURY_SYNC_MAX_CONCURRENCY
         self._tcp_connect_retries = env.MERCURY_SYNC_TCP_CONNECT_RETRIES
+        self._verify_cert = env.MERCURY_SYNC_VERIFY_SSL_CERT
 
         self.connection_type = ConnectionType.TCP
 
     def from_env(self, env: Env):
         self._max_concurrency = env.MERCURY_SYNC_MAX_CONCURRENCY
         self._tcp_connect_retries = env.MERCURY_SYNC_TCP_CONNECT_RETRIES
-
-    def connect(
-        self,
-        cert_path: Optional[str] = None,
-        key_path: Optional[str] = None,
-        worker_socket: Optional[socket.socket] = None,
-    ):
-        try:
-            self._loop = asyncio.get_event_loop()
-
-        except Exception:
-            self._loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._loop)
-
-        self._running = True
-        self._semaphore = asyncio.Semaphore(self._max_concurrency)
-
-        self._compressor = zstandard.ZstdCompressor()
-        self._decompressor = zstandard.ZstdDecompressor()
-
-        if cert_path and key_path:
-            self._server_ssl_context = self._create_server_ssl_context(
-                cert_path=cert_path, key_path=key_path
-            )
-
-        if self.connected is False and worker_socket is None:
-            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.server_socket.bind((self.host, self.port))
-
-            self.server_socket.setblocking(False)
-
-        elif self.connected is False:
-            self.server_socket = worker_socket
-            host, port = worker_socket.getsockname()
-
-            self.host = host
-            self.port = port
-
-        if self.connected is False:
-            server = self._loop.create_server(
-                lambda: MercurySyncTCPServerProtocol(self.read),
-                sock=self.server_socket,
-                ssl=self._server_ssl_context,
-            )
-
-            self._server = self._loop.run_until_complete(server)
-
-            self.connected = True
-
-            self._cleanup_task = self._loop.create_task(self._cleanup())
+        self._verify_cert = env.MERCURY_SYNC_VERIFY_SSL_CERT
 
     async def connect_async(
         self,
         cert_path: Optional[str] = None,
         key_path: Optional[str] = None,
         worker_socket: Optional[socket.socket] = None,
+        upgrade_socket: Optional[socket.socket] = None,
         worker_server: Optional[asyncio.Server] = None,
     ):
         try:
@@ -144,7 +98,8 @@ class MercurySyncTCPConnection:
 
         if cert_path and key_path:
             self._server_ssl_context = self._create_server_ssl_context(
-                cert_path=cert_path, key_path=key_path
+                cert_path=cert_path,
+                key_path=key_path,
             )
 
         if self.connected is False and worker_socket is None:
@@ -177,12 +132,28 @@ class MercurySyncTCPConnection:
             self.connected = True
             self._cleanup_task = self._loop.create_task(self._cleanup())
 
+        if self.connected is False and upgrade_socket:
+            self.upgrade_socket = upgrade_socket
+            host, port = upgrade_socket.getsockname()
+
+            self.host = host
+            self.port = port
+
         if self.connected is False:
             server = await self._loop.create_server(
                 lambda: MercurySyncTCPServerProtocol(self.read),
                 sock=self.server_socket,
-                ssl=self._server_ssl_context,
+                ssl=self._server_ssl_context if self.upgrade_socket is None else None,
             )
+
+            if self.upgrade_socket:
+                upgrade_server = await self._loop.create_server(
+                    lambda: MercurySyncTCPServerProtocol(self.read),
+                    sock=self.upgrade_socket,
+                    ssl=self._server_ssl_context,
+                )
+
+                self._upgrade_server = upgrade_server
 
             self._server = server
             self.connected = True
@@ -190,7 +161,9 @@ class MercurySyncTCPConnection:
             self._cleanup_task = self._loop.create_task(self._cleanup())
 
     def _create_server_ssl_context(
-        self, cert_path: Optional[str] = None, key_path: Optional[str] = None
+        self,
+        cert_path: Optional[str] = None,
+        key_path: Optional[str] = None,
     ) -> ssl.SSLContext:
         if self._server_cert_path is None:
             self._server_cert_path = cert_path
@@ -206,10 +179,23 @@ class MercurySyncTCPConnection:
         ssl_ctx.load_cert_chain(cert_path, keyfile=key_path)
         ssl_ctx.load_verify_locations(cafile=cert_path)
         ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.VerifyMode.CERT_REQUIRED
+
+        match self._verify_cert:
+            case "REQUIRED":
+                ssl_ctx.verify_mode = ssl.VerifyMode.CERT_REQUIRED
+
+            case "OPTIONAL":
+                ssl_ctx.verify_mode = ssl.VerifyMode.CERT_OPTIONAL
+
+            case _:
+                ssl_ctx.verify_mode = ssl.VerifyMode.CERT_NONE
+
         ssl_ctx.set_ciphers("ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384")
 
         return ssl_ctx
+
+    def read(self, data: bytes, transport: asyncio.Transport):
+        pass
 
     async def _cleanup(self):
         while self._running:

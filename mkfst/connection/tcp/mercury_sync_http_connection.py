@@ -31,7 +31,6 @@ from mkfst.models.http import (
     HTTPResponse,
     parse_response,
 )
-from mkfst.caching import cached, SimpleMemoryCache
 from mkfst.models.logging import Event, Response
 from mkfst.rate_limiting import Limiter
 
@@ -89,6 +88,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
         port: int,
         instance_id: int,
         env: Env,
+        upgrade_port: int | None = None,
     ) -> None:
         super().__init__(host, port, instance_id, env)
 
@@ -128,6 +128,8 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
         self._max_request_cache_size = env.MERCURY_SYNC_MAX_REQUEST_CACHE_SIZE
         self._cache_purge_lock: asyncio.Lock | None = None
         self._request_caching_enabled = env.MERCURY_SYNC_ENABLE_REQUEST_CACHING
+        self._verify_cert = env.MERCURY_SYNC_VERIFY_SSL_CERT
+        self._upgrade_port = upgrade_port
 
     def from_env(self, env: Env):
         super().from_env(env)
@@ -140,12 +142,14 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
         self._rate_limiting_backoff_rate = env.MERCURY_SYNC_HTTP_RATE_LIMIT_BACKOFF_RATE
         self._max_request_cache_size = env.MERCURY_SYNC_MAX_REQUEST_CACHE_SIZE
         self._request_caching_enabled = env.MERCURY_SYNC_ENABLE_REQUEST_CACHING
+        self._verify_cert = env.MERCURY_SYNC_VERIFY_SSL_CERT
 
     async def connect_async(
         self,
         cert_path: Optional[str] = None,
         key_path: Optional[str] = None,
         worker_socket: Optional[socket.socket] = None,
+        upgrade_socket: Optional[socket.socket] = None,
     ):
         async with self._logger.context() as ctx:
             self._backoff_sem = asyncio.Semaphore(self._rate_limiting_backoff_rate)
@@ -164,6 +168,9 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 cert_path=cert_path,
                 key_path=key_path,
                 worker_socket=worker_socket,
+                upgrade_socket=upgrade_socket
+                if upgrade_socket and cert_path and key_path
+                else None,
             )
 
     def read(self, data: ReceiveBuffer, transport: asyncio.Transport) -> None:
@@ -524,10 +531,13 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         )
                     )
 
+                transport.get_extra_info("")
+
                 if has_middleware:
                     context = ResponseContext(
                         request_path,
                         request_method,
+                        request_headers,
                         request_params,
                         request_query,
                         request_data,
@@ -536,6 +546,11 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         fabricator,
                         response_parser,
                         ip_address,
+                        "https"
+                        if bool(transport.get_extra_info("sslcontext"))
+                        else "http",
+                        transport.get_extra_info("sockname"),
+                        self._upgrade_port,
                     )
 
                     await ctx.log(

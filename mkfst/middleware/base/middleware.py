@@ -36,7 +36,6 @@ class Middleware:
         ] = None,
         response_headers: Dict[str, str] | None = None,
     ) -> None:
-        
         if response_headers is None:
             response_headers = {}
 
@@ -63,7 +62,6 @@ class Middleware:
         )
 
     def wrap(self, handler: CallHandler):
-
         wrapper = self._wrapper_types.get(
             self.middleware_type,
             BidirectionalWrapper(
@@ -123,7 +121,7 @@ class Middleware:
         handler: MiddlewareHandler | Handler | None = None,
     ) -> MiddlewareResult:
         raise NotImplementedError(
-            "Err. - __post__() is not implemented for base Middleware class."
+            "Err. - __run__() is not implemented for base Middleware class."
         )
 
     async def run(self, *args, **kwargs):
@@ -135,7 +133,7 @@ class Middleware:
         raise NotImplementedError(
             "Err. - close() is not implemented for base Middleware class."
         )
-    
+
     def abort(self):
         raise NotImplementedError(
             "Err. - abort() is not implemented for base Middleware class."
