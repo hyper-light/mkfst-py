@@ -40,6 +40,15 @@ dependencies = [
 ]
 
 
+[project.optional-dependencies]
+
+auth = [
+	"pycryptodome",
+	"rsa",
+	"ecdsa!=0.15",
+	"pyasn1",
+]
+
 [project.urls]
 Homepage = "https://github.com/hyper-light/mkfst-py"
 

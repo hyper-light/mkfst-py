@@ -51,95 +51,20 @@ class TrustedHost(Middleware):
                 )
             )
 
-            if self.allow_any or context.protocol not in (
-                "http",
-                "ws",
-                "https",
-                "wss",
-            ):
-                context.status = 400
-                context.errors.append(Exception("Unsupported protocol"))
-
-                await ctx.log(
-                    Event(
-                        level=LogLevel.ERROR,
-                        message=f"Request - {context.method} {context.path}:{context.ip_address} - Invalid protocol ",
-                    )
-                )
-
-                return (
-                    context,
-                    response,
-                ), False
-
-            host: str | None = context.request_headers.get(
-                "host",
-                context.request_headers.get("Host"),
-            )
-
-            if host is None:
-                context.status = 400
-                context.errors.append(Exception("Invalid host header"))
-
-                await ctx.log(
-                    Event(
-                        level=LogLevel.ERROR,
-                        message=f"Request - {context.method} {context.path}:{context.ip_address} - Invalid host header ",
-                    )
-                )
-
-                return (
-                    context,
-                    response,
-                ), False
-
-            host, _ = host.split(":", maxsplit=1)
-
-            is_valid_host = False
-            found_www_redirect = False
-
-            for pattern in self.allowed_hosts:
-                if host == pattern or (
-                    pattern.startswith("*") and host.endswith(pattern[1:])
+            try:
+                if self.allow_any or context.protocol not in (
+                    "http",
+                    "ws",
+                    "https",
+                    "wss",
                 ):
-                    is_valid_host = True
-                    break
-                elif "www." + host == pattern:
-                    found_www_redirect = True
-
-            if is_valid_host:
-                await ctx.log(
-                    Event(
-                        level=LogLevel.INFO,
-                        message=f"Request - {context.method} {context.path}:{context.ip_address} - {host} matched host validation scheme",
-                    )
-                )
-
-                return (
-                    context,
-                    response,
-                ), True
-
-            else:
-                if found_www_redirect and self.www_redirect:
-                    url = context.to_request_url()
-                    redirect_url = urlunparse(
-                        url._replace(
-                            netloc="www." + url.netloc,
-                        )
-                    )
-
-                    context.status = 307
-                    context.response_headers.update(
-                        {
-                            "location": redirect_url,
-                        }
-                    )
+                    context.status = 400
+                    context.errors.append(Exception("Unsupported protocol"))
 
                     await ctx.log(
                         Event(
-                            level=LogLevel.INFO,
-                            message=f"Request - {context.method} {context.path}:{context.ip_address} - Enforcing www redirect for {host} ",
+                            level=LogLevel.ERROR,
+                            message=f"Request - {context.method} {context.path}:{context.ip_address} - Invalid protocol ",
                         )
                     )
 
@@ -148,13 +73,105 @@ class TrustedHost(Middleware):
                         response,
                     ), False
 
-                context.status = 400
-                context.errors.append(Exception("Invalid host header"))
+                host: str | None = context.request_headers.get(
+                    "host",
+                    context.request_headers.get("Host"),
+                )
+
+                if host is None:
+                    context.status = 400
+                    context.errors.append(Exception("Invalid host header"))
+
+                    await ctx.log(
+                        Event(
+                            level=LogLevel.ERROR,
+                            message=f"Request - {context.method} {context.path}:{context.ip_address} - Invalid host header ",
+                        )
+                    )
+
+                    return (
+                        context,
+                        response,
+                    ), False
+
+                host, _ = host.split(":", maxsplit=1)
+
+                is_valid_host = False
+                found_www_redirect = False
+
+                for pattern in self.allowed_hosts:
+                    if host == pattern or (
+                        pattern.startswith("*") and host.endswith(pattern[1:])
+                    ):
+                        is_valid_host = True
+                        break
+                    elif "www." + host == pattern:
+                        found_www_redirect = True
+
+                if is_valid_host:
+                    await ctx.log(
+                        Event(
+                            level=LogLevel.INFO,
+                            message=f"Request - {context.method} {context.path}:{context.ip_address} - {host} matched host validation scheme",
+                        )
+                    )
+
+                    return (
+                        context,
+                        response,
+                    ), True
+
+                else:
+                    if found_www_redirect and self.www_redirect:
+                        url = context.to_request_url()
+                        redirect_url = urlunparse(
+                            url._replace(
+                                netloc="www." + url.netloc,
+                            )
+                        )
+
+                        context.status = 307
+                        context.response_headers.update(
+                            {
+                                "location": redirect_url,
+                            }
+                        )
+
+                        await ctx.log(
+                            Event(
+                                level=LogLevel.INFO,
+                                message=f"Request - {context.method} {context.path}:{context.ip_address} - Enforcing www redirect for {host} ",
+                            )
+                        )
+
+                        return (
+                            context,
+                            response,
+                        ), False
+
+                    context.status = 400
+                    context.errors.append(Exception("Invalid host header"))
+
+                    await ctx.log(
+                        Event(
+                            level=LogLevel.ERROR,
+                            message=f"Request - {context.method} {context.path}:{context.ip_address} - Invalid host header ",
+                        )
+                    )
+
+                    return (
+                        context,
+                        response,
+                    ), False
+
+            except Exception as e:
+                context.errors.append(e)
+                context.status = 500
 
                 await ctx.log(
                     Event(
                         level=LogLevel.ERROR,
-                        message=f"Request - {context.method} {context.path}:{context.ip_address} - Invalid host header ",
+                        message=f"Request - {context.method} {context.path}:{context.ip_address} - Encountered error attempting trusted host check - {str(e)}",
                     )
                 )
 
