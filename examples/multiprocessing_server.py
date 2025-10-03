@@ -3,7 +3,6 @@ import asyncio
 from mkfst import (
     Service,
     endpoint,
-    Env,
 )
 from pydantic import BaseModel
 
@@ -29,10 +28,6 @@ if __name__ == "__main__":
             "localhost",
             6099,
             log_level="error",
-            upgrade_port=6100,
-            env=Env(
-                MERCURY_SYNC_ENABLE_REQUEST_CACHING=True,
-            ),
         )
 
         await server.run()

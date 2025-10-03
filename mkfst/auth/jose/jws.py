@@ -1,5 +1,6 @@
 import binascii
-import json
+import orjson
+from pydantic import JsonValue
 
 try:
     from collections.abc import Iterable, Mapping
@@ -13,7 +14,12 @@ from .jwk import construct
 from .utils import base64url_decode, base64url_encode
 
 
-def sign(payload, key, headers=None, algorithm=ALGORITHMS.HS256):
+def sign(
+    payload: dict[str, JsonValue],
+    key: str | dict[str, str],
+    headers: dict[str, JsonValue] | None = None,
+    algorithm=ALGORITHMS.HS256,
+):
     """Signs a claims set and returns a JWS string.
 
     Args:
@@ -45,13 +51,16 @@ def sign(payload, key, headers=None, algorithm=ALGORITHMS.HS256):
     encoded_header = _encode_header(algorithm, additional_headers=headers)
     encoded_payload = _encode_payload(payload)
     signed_output = _sign_header_and_claims(
-        encoded_header, encoded_payload, algorithm, key
+        encoded_header,
+        encoded_payload,
+        algorithm,
+        key,
     )
 
     return signed_output
 
 
-def verify(token, key, algorithms, verify=True):
+def verify(token: str, key: str, algorithms, verify=True):
     """Verifies a JWS string's signature.
 
     Args:
@@ -137,29 +146,27 @@ def _encode_header(algorithm, additional_headers=None):
     if additional_headers:
         header.update(additional_headers)
 
-    json_header = json.dumps(
-        header,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
+    json_header: bytes = orjson.dumps(header)
 
     return base64url_encode(json_header)
 
 
-def _encode_payload(payload):
+def _encode_payload(payload: dict[str, JsonValue]):
     if isinstance(payload, Mapping):
         try:
-            payload = json.dumps(
-                payload,
-                separators=(",", ":"),
-            ).encode("utf-8")
+            payload: bytes = orjson.dumps(payload)
         except ValueError:
             pass
 
     return base64url_encode(payload)
 
 
-def _sign_header_and_claims(encoded_header, encoded_claims, algorithm, key):
+def _sign_header_and_claims(
+    encoded_header: bytes,
+    encoded_claims: bytes,
+    algorithm,
+    key: str | Key,
+):
     signing_input = b".".join([encoded_header, encoded_claims])
     try:
         if not isinstance(key, Key):
@@ -175,7 +182,7 @@ def _sign_header_and_claims(encoded_header, encoded_claims, algorithm, key):
     return encoded_string.decode("utf-8")
 
 
-def _load(jwt):
+def _load(jwt: str | bytes):
     if isinstance(jwt, str):
         jwt = jwt.encode("utf-8")
     try:
@@ -188,7 +195,7 @@ def _load(jwt):
         raise JWSError("Invalid header padding")
 
     try:
-        header = json.loads(header_data.decode("utf-8"))
+        header: dict[bytes, bytes] = orjson.loads(header_data)
     except ValueError as e:
         raise JWSError("Invalid header string: %s" % e)
 
@@ -208,7 +215,12 @@ def _load(jwt):
     return (header, payload, signing_input, signature)
 
 
-def _sig_matches_keys(keys, signing_input, signature, alg):
+def _sig_matches_keys(
+    keys: list[str | Key],
+    signing_input: bytes,
+    signature: bytes,
+    alg,
+):
     for key in keys:
         if not isinstance(key, Key):
             key = construct(key, alg)
@@ -220,12 +232,12 @@ def _sig_matches_keys(keys, signing_input, signature, alg):
     return False
 
 
-def _get_keys(key):
+def _get_keys(key: str | Key):
     if isinstance(key, Key):
         return (key,)
 
     try:
-        key = json.loads(key, parse_int=str, parse_float=str)
+        key = orjson.loads(key, parse_int=str, parse_float=str)
     except Exception:
         pass
 
@@ -254,7 +266,13 @@ def _get_keys(key):
         return (key,)
 
 
-def _verify_signature(signing_input, header, signature, key="", algorithms=None):
+def _verify_signature(
+    signing_input,
+    header: dict[str, str],
+    signature: bytes,
+    key: str | Key = "",
+    algorithms=None,
+):
     alg = header.get("alg")
     if not alg:
         raise JWSError("No algorithm was specified in the JWS header.")

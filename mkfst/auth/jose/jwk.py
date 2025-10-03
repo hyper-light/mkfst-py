@@ -1,3 +1,4 @@
+from pydantic import JsonValue
 from .backends.base import Key
 from .constants import ALGORITHMS
 from .exceptions import JWKError
@@ -60,7 +61,7 @@ def register_key(algorithm, key_class):
     return True
 
 
-def construct(key_data, algorithm=None):
+def construct(key_data: str | dict[str, JsonValue], algorithm=None):
     """
     Construct a Key object for the given algorithm with the given
     key_data.

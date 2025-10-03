@@ -1,4 +1,4 @@
-import json
+import orjson
 from calendar import timegm
 from datetime import datetime, timedelta
 
@@ -16,11 +16,21 @@ except ImportError:
 
 from .constants import ALGORITHMS
 from .exceptions import ExpiredSignatureError, JWSError, JWTClaimsError, JWTError
-from .jws import get_unverified_header as get_unverified_header_jws, sign, verify
+from .jws import (
+    get_unverified_header as get_unverified_header_jws,
+    sign,
+    verify,
+    get_unverified_claims as get_unverified_claims_jws,
+)
 from .utils import calculate_at_hash, timedelta_total_seconds
 
 
-def encode(claims, key, algorithm=ALGORITHMS.HS256, headers=None, access_token=None):
+Claims = dict[str, str | datetime.date]
+
+
+def encode(
+    claims: Claims, key, algorithm=ALGORITHMS.HS256, headers=None, access_token=None
+):
     """Encodes a claims set and returns a JWT string.
 
     JWTs are JWS signed objects with a few reserved claims.
@@ -174,7 +184,7 @@ def decode(
     algorithm = get_unverified_header_jws(token)["alg"]
 
     try:
-        claims = json.loads(payload.decode("utf-8"))
+        claims: Claims = orjson.loads(payload)
     except ValueError as e:
         raise JWTError("Invalid payload string: %s" % e)
 
@@ -245,12 +255,12 @@ def get_unverified_claims(token):
         JWTError: If there is an exception decoding the token.
     """
     try:
-        claims = get_unverified_claims(token)
+        claims = get_unverified_claims_jws(token)
     except Exception:
         raise JWTError("Error decoding token claims.")
 
     try:
-        claims = json.loads(claims.decode("utf-8"))
+        claims: Claims = orjson.loads(claims)
     except ValueError as e:
         raise JWTError("Invalid claims string: %s" % e)
 

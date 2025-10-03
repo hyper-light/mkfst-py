@@ -33,7 +33,7 @@ class HTTPSRedirect(Middleware):
             "ws": "wss",
         }
 
-        self._port_pattern = re.compile(":\d{4}")
+        self._port_pattern = re.compile(r":\d{4}")
 
     async def __run__(
         self,
