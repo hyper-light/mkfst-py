@@ -31,7 +31,7 @@ from mkfst.models.http import (
     HTTPResponse,
     parse_response,
 )
-from mkfst.models.logging import Event, Response
+from mkfst.models.logging import Event, Response, Request
 from mkfst.rate_limiting import Limiter
 
 from .fabricator import Fabricator
@@ -71,14 +71,6 @@ def _obsolete_line_fold(lines: Iterable[bytes]) -> Iterable[bytes]:
             last = line
     if last is not None:
         yield last
-
-
-def _decode_header_lines(
-    lines: Iterable[bytes],
-) -> Iterable[Tuple[bytes, bytes]]:
-    for line in _obsolete_line_fold(lines):
-        matches = validate(header_field_re, line, "illegal header line: {!r}", line)
-        yield (matches["field_name"], matches["field_value"])
 
 
 class MercurySyncHTTPConnection(MercurySyncTCPConnection):
@@ -209,25 +201,32 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 )
 
                 request_headers = {
-                    key.decode(): value.decode()
-                    for key, value in _decode_header_lines(lines[1:])
+                    matches["field_name"].decode(): matches["field_value"].decode()
+                    for matches in [
+                        validate(
+                            header_field_re, line, "illegal header line: {!r}", line
+                        )
+                        for line in _obsolete_line_fold(lines[1:])
+                    ]
                 }
 
                 request_method = matches.get("method", b"")
-                request_version = matches.get("version", b"1.1")
+                request_version = matches.get("version", b"HTTP/1.1")
                 request_path = matches.get("target", b"")
 
                 request_method = request_method.decode()
-                request_version = request_version.decode()
                 request_path = request_path.decode()
 
                 request_data = bytes(data)
                 data.clear()
 
                 await ctx.log(
-                    Event(
+                    Request(
                         level=LogLevel.DEBUG,
-                        message=f"Request - {request_method} {request_path}:{ip_address} - received",
+                        message="Request received",
+                        path=request_path,
+                        method=request_method,
+                        ip_address=ip_address,
                     )
                 )
 
@@ -236,9 +235,13 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     request_path, request_query = request_path.split("?")
 
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - received query - {request_query}",
+                            message="Query received",
+                            path=request_path,
+                            method=request_method,
+                            ip_address=ip_address,
+                            query=request_query,
                         )
                     )
 
@@ -271,27 +274,29 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
             handler_key = f"{request_method}_{request_path}"
 
             cache_key: int | None = None
+            new_request: bool = True
             if self._request_caching_enabled:
                 cache_key = hash(data)
 
-            if cache_key and (cached_response := self._cache.get(cache_key)):
-                response_data, status_code, _ = cached_response
+                if cached_response := self._cache.get(cache_key):
+                    response_data, status_code, _ = cached_response
+                    new_request = False
 
-                if self._use_encryption is False:
-                    await ctx.log(
-                        Response(
-                            path=request_path,
-                            method=request_method,
-                            ip_address=ip_address,
-                            status=status_code,
-                        ),
-                        template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} - {status}",
-                    )
+                    if self._use_encryption is False:
+                        await ctx.log(
+                            Response(
+                                path=request_path,
+                                method=request_method,
+                                ip_address=ip_address,
+                                status=status_code,
+                            ),
+                            template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} - {status}",
+                        )
 
-                if not transport.is_closing():
-                    transport.write(response_data)
+                    if not transport.is_closing():
+                        transport.write(response_data)
 
-                return
+                    return
 
             handler: Handler | None = None
             fabricator: Fabricator | None = None
@@ -302,9 +307,12 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 fabricator = self.fabricators[handler_key]
 
                 await ctx.log(
-                    Event(
+                    Request(
                         level=LogLevel.DEBUG,
-                        message=f"Request - {request_method} {request_path}:{ip_address} - successful exact match for route",
+                        message="Exact match for route",
+                        method=request_method,
+                        path=request_path,
+                        ip_address=ip_address,
                     )
                 )
 
@@ -322,9 +330,12 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     fabricator = self.fabricators.get(handler_key)
 
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - successful partial match for route",
+                            message="Fallback match for route",
+                            method=request_method,
+                            path=request_path,
+                            ip_address=ip_address,
                         )
                     )
 
@@ -334,7 +345,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         path=request_path,
                         status=404,
                         error="Not Found",
-                        protocol=request_version,
+                        protocol=request_version.decode(),
                         method=request_method,
                     )
 
@@ -361,7 +372,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         path=request_path,
                         status=405,
                         error="Method Not Allowed",
-                        protocol=request_version,
+                        protocol=request_version.decode(),
                         method=request_method,
                     )
 
@@ -385,10 +396,13 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
             try:
                 if self._rate_limiting_enabled:
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - entered rate limiting",
-                        )
+                            message="Entered rate limiting",
+                            method=request_method,
+                            path=request_path,
+                            ip_address=ip_address,
+                        ),
                     )
 
                     rejected = await self._limiter.limit(
@@ -399,10 +413,13 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     )
 
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - rate limiting returned status - {rejected}",
-                        )
+                            message=f"Rate limiting returned status - {rejected}",
+                            method=request_method,
+                            path=request_path,
+                            ip_address=ip_address,
+                        ),
                     )
 
                     if rejected and transport.is_closing() is False:
@@ -423,7 +440,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                                 path=request_path,
                                 status=429,
                                 error="Too Many Requests",
-                                protocol=request_version,
+                                protocol=request_version.decode(),
                                 method=request_method,
                             )
 
@@ -454,10 +471,17 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 has_middleware = self._middleware_enabled.get(handler_key)
 
                 await ctx.log(
-                    Event(
+                    Request(
                         level=LogLevel.DEBUG,
-                        message=f"Request - {request_method} {request_path}:{ip_address} - {'middleware found' if has_middleware else 'no middleware found'}",
-                    )
+                        message=(
+                            "Middleware found"
+                            if has_middleware
+                            else "No middleware found"
+                        ),
+                        method=request_method,
+                        path=request_path,
+                        ip_address=ip_address,
+                    ),
                 )
 
                 args, kwargs, validation_error = fabricator.parse(
@@ -469,10 +493,13 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 )
 
                 await ctx.log(
-                    Event(
+                    Request(
                         level=LogLevel.DEBUG,
-                        message=f"Request - {request_method} {request_path}:{ip_address} - parsed args",
-                    )
+                        message="Fabricator parsed args",
+                        method=request_method,
+                        path=request_path,
+                        ip_address=ip_address,
+                    ),
                 )
 
                 if validation_error:
@@ -493,7 +520,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         status=422,
                         error="Unprocessable Content",
                         data=validation_error.json(),
-                        protocol=request_version,
+                        protocol=request_version.decode(),
                         method=request_method,
                         headers={"content-type": "application/json"},
                     )
@@ -508,14 +535,17 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 encoded_data: str = ""
 
                 await ctx.log(
-                    Event(
+                    Request(
                         level=LogLevel.DEBUG,
                         message=(
                             f"Request - {request_method} {request_path}:{ip_address} - sending response headers - {', '.join(response_headers)}"
                             if len(response_headers) > 0
                             else f"Request - {request_method} {request_path}:{ip_address} - has no response headers"
                         ),
-                    )
+                        method=request_method,
+                        path=request_path,
+                        ip_address=ip_address,
+                    ),
                 )
 
                 (response_parser, status_code) = self._response_parsers.get(
@@ -525,10 +555,13 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 if status_code is None:
                     status_code = 200
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - set status code to default - {status_code}",
-                        )
+                            message=f"Set status code to default - {status_code}",
+                            method=request_method,
+                            path=request_path,
+                            ip_address=ip_address,
+                        ),
                     )
 
                 transport.get_extra_info("")
@@ -554,10 +587,13 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     )
 
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - executing route handler with middleware - {handler.__class__.__name__}",
-                        )
+                            message=f"Executing route handler with middleware - {handler.__class__.__name__}",
+                            method=request_method,
+                            path=request_path,
+                            ip_address=ip_address,
+                        ),
                     )
 
                     response: Tuple[ResponseContext, Any] = await handler(
@@ -583,7 +619,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                             status=500,
                             error="Internal server error.",
                             data=errors.decode(),
-                            protocol=request_version,
+                            protocol=request_version.decode(),
                             headers=error_headers,
                             method=request_method,
                         )
@@ -611,10 +647,13 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         )
 
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - completed  route handler execution with middleware",
-                        )
+                            message="Completed route handler execution with middleware",
+                            method=request_method,
+                            path=request_path,
+                            ip_address=ip_address,
+                        ),
                     )
 
                     response_headers.update(context.response_headers)
@@ -622,27 +661,36 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
 
                 else:
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - executing route handler",
-                        )
+                            message="Executing route handler",
+                            method=request_method,
+                            path=request_path,
+                            ip_address=ip_address,
+                        ),
                     )
 
                     response_data = await handler(*args, **kwargs)
 
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - completed route handler execution",
-                        )
+                            message="Completed route handler execution",
+                            method=request_method,
+                            path=request_path,
+                            ip_address=ip_address,
+                        ),
                     )
 
                 if response_parser:
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - serializing response body",
-                        )
+                            message="Serializing response body",
+                            method=request_method,
+                            path=request_path,
+                            ip_address=ip_address,
+                        ),
                     )
 
                     encoded_data = parse_response(response_data, response_parser)
@@ -650,10 +698,13 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     headers = f"content-length: {content_length}"
 
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - serialized {content_length} bytes",
-                        )
+                            message=f"Serialized {content_length} bytes",
+                            method=request_method,
+                            path=request_path,
+                            ip_address=ip_address,
+                        ),
                     )
 
                 elif response_data:
@@ -662,10 +713,13 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     content_length = len(response_data)
 
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - set response body as {content_length} bytes",
-                        )
+                            message=f"Set response body as {content_length} bytes",
+                            method=request_method,
+                            path=request_path,
+                            ip_address=ip_address,
+                        ),
                     )
 
                     headers = f"content-length: {content_length}"
@@ -674,20 +728,26 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     headers = "content-length: 0"
 
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - response has no body",
-                        )
+                            message="Response has no body",
+                            method=request_method,
+                            path=request_path,
+                            ip_address=ip_address,
+                        ),
                     )
 
                 for key in response_headers:
                     headers = f"{headers}\r\n{key}: {response_headers[key]}"
 
                     await ctx.log(
-                        Event(
+                        Request(
                             level=LogLevel.DEBUG,
-                            message=f"Request - {request_method} {request_path}:{ip_address} - response adding header - {key}:{response_headers[key]}",
-                        )
+                            message=f"Response adding header - {key}:{response_headers[key]}",
+                            method=request_method,
+                            path=request_path,
+                            ip_address=ip_address,
+                        ),
                     )
 
                 response_data = f"HTTP/1.1 {status_code} OK\r\n{headers}\r\n\r\n{encoded_data}".encode()
@@ -696,7 +756,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     encrypted_data = self._encryptor.encrypt(response_data)
                     response_data = self._compressor.compress(encrypted_data)
 
-                if self._request_caching_enabled:
+                if self._request_caching_enabled and new_request:
                     await self._cache_purge_lock.acquire()
 
                     if len(self._cache) >= self._max_request_cache_size:
@@ -744,7 +804,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                             path=request_path,
                             status=500,
                             error=f"Internal Error - {str(e)}",
-                            protocol=request_version,
+                            protocol=request_version.decode(),
                             headers={"content-type": "application/json"},
                             method=request_method,
                         )

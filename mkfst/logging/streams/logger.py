@@ -270,6 +270,7 @@ class Logger:
         ) as ctx:
             await ctx.log(
                 Log(
+                    level=entry.level,
                     entry=entry,
                     filename=code.co_filename,
                     function_name=code.co_name,
@@ -313,6 +314,7 @@ class Logger:
                 *[
                     ctx.put(
                         Log(
+                            level=entry.level,
                             entry=entry,
                             filename=code.co_filename,
                             function_name=code.co_name,
@@ -353,6 +355,7 @@ class Logger:
         ) as ctx:
             await ctx.put(
                 Log(
+                    level=entry.level,
                     entry=entry,
                     filename=code.co_filename,
                     function_name=code.co_name,

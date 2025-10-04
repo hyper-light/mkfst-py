@@ -2,15 +2,8 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-LogLevelName = Literal[
-    'trace',
-    'debug',
-    'info',
-    'warn',
-    'error',
-    'critical',
-    'fatal'
-]
+LogLevelName = Literal["trace", "debug", "info", "warn", "error", "critical", "fatal"]
+
 
 class LogLevel(Enum):
     TRACE = "TRACE"
@@ -19,7 +12,7 @@ class LogLevel(Enum):
     WARN = "WARN"
     ERROR = "ERROR"
     CRITICAL = "CRITICAL"
-    FATAL = 'FATAL'
+    FATAL = "FATAL"
 
     @classmethod
     def to_level(cls, level_name: LogLevelName) -> LogLevel:
@@ -30,7 +23,7 @@ class LogLevel(Enum):
             LogLevel.WARN.value: LogLevel.WARN,
             LogLevel.ERROR.value: LogLevel.ERROR,
             LogLevel.CRITICAL.value: LogLevel.CRITICAL,
-            LogLevel.FATAL.value: LogLevel.FATAL
+            LogLevel.FATAL.value: LogLevel.FATAL,
         }
 
         return levels_map.get(level_name.upper())

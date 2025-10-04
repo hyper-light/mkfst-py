@@ -5,28 +5,28 @@ blank_line_regex = re.compile(b"\n\r?\n", re.MULTILINE)
 
 class ReceiveBuffer:
     def __init__(self) -> None:
-        self._data = bytearray()
+        self.buffer = bytearray()
         self._next_line_search = 0
         self._multiple_lines_search = 0
 
     def __iadd__(self, byteslike: bytes | bytearray) -> "ReceiveBuffer":
-        self._data += byteslike
+        self.buffer += byteslike
         return self
 
     def __bool__(self) -> bool:
         return bool(len(self))
 
     def __len__(self) -> int:
-        return len(self._data)
+        return len(self.buffer)
 
     # for @property unprocessed_data
     def __bytes__(self) -> bytes:
-        return bytes(self._data)
+        return bytes(self.buffer)
 
     def _extract(self, count: int) -> bytearray:
         # extracting an initial slice of the data buffer and return it
-        out = self._data[:count]
-        del self._data[:count]
+        out = self.buffer[:count]
+        del self.buffer[:count]
 
         self._next_line_search = 0
         self._multiple_lines_search = 0
@@ -37,11 +37,17 @@ class ReceiveBuffer:
         """
         Extract a fixed number of bytes from the buffer.
         """
-        out = self._data[:count]
+        out = self.buffer[:count]
         if not out:
             return None
 
-        return self._extract(count)
+        out = self.buffer[:count]
+        del self.buffer[:count]
+
+        self._next_line_search = 0
+        self._multiple_lines_search = 0
+
+        return out
 
     def maybe_extract_next_line(self) -> bytearray | None:
         """
@@ -49,39 +55,60 @@ class ReceiveBuffer:
         """
         # Only search in buffer space that we've not already looked at.
         search_start_index = max(0, self._next_line_search - 1)
-        partial_idx = self._data.find(b"\r\n", search_start_index)
+        partial_idx = self.buffer.find(b"\r\n", search_start_index)
 
         if partial_idx == -1:
-            self._next_line_search = len(self._data)
+            self._next_line_search = len(self.buffer)
             return None
 
         # + 2 is to compensate len(b"\r\n")
         idx = partial_idx + 2
 
-        return self._extract(idx)
+        out = self.buffer[:idx]
+        del self.buffer[:idx]
+
+        self._next_line_search = 0
+        self._multiple_lines_search = 0
+
+        return out
 
     def maybe_extract_lines(self) -> list[bytearray] | None:
         """
         Extract everything up to the first blank line, and return a list of lines.
         """
         # Handle the case where we have an immediate empty line.
-        if self._data[:1] == b"\n":
-            self._extract(1)
+        if self.buffer[:1] == b"\n":
+            out = self.buffer[:1]
+            del self.buffer[:1]
+
+            self._next_line_search = 0
+            self._multiple_lines_search = 0
+
             return []
 
-        if self._data[:2] == b"\r\n":
-            self._extract(2)
+        if self.buffer[:2] == b"\r\n":
+            out = self.buffer[:2]
+            del self.buffer[:2]
+
+            self._next_line_search = 0
+            self._multiple_lines_search = 0
+
             return []
 
         # Only search in buffer space that we've not already looked at.
-        match = blank_line_regex.search(self._data, self._multiple_lines_search)
+        match = blank_line_regex.search(self.buffer, self._multiple_lines_search)
         if match is None:
-            self._multiple_lines_search = max(0, len(self._data) - 2)
+            self._multiple_lines_search = max(0, len(self.buffer) - 2)
             return None
 
         # Truncate the buffer and return it.
         idx = match.span(0)[-1]
-        out = self._extract(idx)
+        out = self.buffer[:idx]
+        del self.buffer[:idx]
+
+        self._next_line_search = 0
+        self._multiple_lines_search = 0
+
         lines = out.split(b"\n")
 
         for line in lines:
@@ -107,9 +134,9 @@ class ReceiveBuffer:
         try:
             # HTTP header line must not contain non-printable characters
             # and should not start with a space
-            return self._data[0] < 0x21
+            return self.buffer[0] < 0x21
         except IndexError:
             return False
 
     def clear(self):
-        self._data.clear()
+        self.buffer.clear()

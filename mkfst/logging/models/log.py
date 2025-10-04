@@ -3,12 +3,14 @@ import threading
 import datetime
 from typing import Generic, TypeVar
 from .entry import Entry
+from .log_level import LogLevel
 
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class Log(msgspec.Struct, Generic[T], kw_only=True):
+    level: LogLevel
     entry: Entry
     filename: str
     function_name: str

@@ -3,6 +3,7 @@ import asyncio
 from mkfst import (
     Service,
     endpoint,
+    Env,
 )
 from pydantic import BaseModel
 
@@ -16,10 +17,6 @@ class TestService(Service):
     async def get_service(self) -> str:
         return "Hello World"
 
-    @endpoint("/post", methods=["POST"])
-    async def get_data(self, data: dict) -> dict:
-        return data
-
 
 if __name__ == "__main__":
 
@@ -28,6 +25,7 @@ if __name__ == "__main__":
             "localhost",
             6099,
             log_level="error",
+            workers=24,
         )
 
         await server.run()

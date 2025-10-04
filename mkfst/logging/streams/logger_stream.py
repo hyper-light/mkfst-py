@@ -129,6 +129,18 @@ class LoggerStream:
 
         self._models.update({"default": (Entry, {"level": LogLevel.INFO})})
 
+        self._log_levels_map = {
+            LogLevel.TRACE: 0,
+            LogLevel.DEBUG: 1,
+            LogLevel.INFO: 2,
+            LogLevel.WARN: 3,
+            LogLevel.ERROR: 4,
+            LogLevel.CRITICAL: 5,
+            LogLevel.FATAL: 6,
+        }
+
+        self._level_value = self._log_levels_map[self._config.level]
+
     @property
     def has_active_subscriptions(self):
         if self._provider is None:
@@ -561,6 +573,8 @@ class LoggerStream:
         filter: Callable[[T], bool] | None = None,
     ):
         entry = self._to_entry(message, name)
+        if self._log_levels_map[entry.level] < self._level_value:
+            return
 
         await self.log(
             entry,
@@ -580,6 +594,9 @@ class LoggerStream:
     ):
         filename: str | None = None
         directory: str | None = None
+
+        if self._log_levels_map[entry.level] < self._level_value:
+            return
 
         if path:
             logfile_path = pathlib.Path(path)
@@ -624,7 +641,7 @@ class LoggerStream:
         self,
         message: str,
         name: str,
-    ):
+    ) -> Entry:
         model, defaults = self._models.get(name, self._models.get("default"))
 
         return model(message=message, **defaults)
@@ -779,6 +796,7 @@ class LoggerStream:
             log_file, line_number, function_name = self._find_caller()
 
             log = Log(
+                level=entry.level,
                 entry=entry,
                 filename=log_file,
                 function_name=function_name,
@@ -867,6 +885,7 @@ class LoggerStream:
             frame = sys._getframe(1)
             code = frame.f_code
             entry = Log(
+                level=entry.level,
                 entry=entry,
                 filename=code.co_filename,
                 function_name=code.co_name,
