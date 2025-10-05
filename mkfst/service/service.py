@@ -58,6 +58,7 @@ from mkfst.models.logging import Event
 from mkfst.tasks import TaskRunner
 
 from .group import Group
+from .parse_to_source_type import parse_to_source_type
 from .socket import bind_tcp_socket
 
 
@@ -719,12 +720,15 @@ class Service(Generic[E]):
                                 for method in methods
                             },
                         ),
-                        responses=responses,
+                        responses={
+                            status: parse_to_source_type(response_type)
+                            for status, response_type in responses.items()
+                        },
                         response_headers=call_response_headers,
-                        headers=fabricator["headers"],
-                        parameters=fabricator["parameters"],
-                        query=fabricator["query"],
-                        body=fabricator["body"],
+                        headers=parse_to_source_type(fabricator["headers"]),
+                        parameters=parse_to_source_type(fabricator["parameters"]),
+                        query=parse_to_source_type(fabricator["query"]),
+                        body=parse_to_source_type(fabricator["body"]),
                         required=fabricator.required_params,
                     )
 

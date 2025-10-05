@@ -11,6 +11,10 @@ class TestService(Service):
     async def get_service(self) -> str:
         return "Hello World"
 
+    @endpoint("/post")
+    async def post_data(self, data: dict[str, str]) -> dict[str, str]:
+        return data
+
 
 if __name__ == "__main__":
 
