@@ -46,9 +46,11 @@ class Request(Entry, kw_only=True):
     ):
         kwargs = {
             "level": self.level.value,
-            "path": self.path if isinstance(self.path, str) else self.path.decode(),
+            "path": self.path
+            if isinstance(self.path, str) or self.path is None
+            else self.path.decode(),
             "method": self.method
-            if isinstance(self.message, str)
+            if isinstance(self.method, str) or self.method is None
             else self.method.decode(),
             "headers": ", ".join(
                 [
@@ -70,7 +72,9 @@ class Request(Entry, kw_only=True):
             )
             if self.params
             else None,
-            "query": self.query if isinstance(self.query, str) else self.query.decode(),
+            "query": self.query
+            if isinstance(self.query, str) or self.query is None
+            else self.query.decode(),
             "body": self.body,
             "error": self.error,
             "ip_address": self.ip_address,

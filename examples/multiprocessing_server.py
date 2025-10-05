@@ -3,13 +3,7 @@ import asyncio
 from mkfst import (
     Service,
     endpoint,
-    Env,
 )
-from pydantic import BaseModel
-
-
-class Greeting(BaseModel):
-    message: str
 
 
 class TestService(Service):
@@ -25,7 +19,6 @@ if __name__ == "__main__":
             "localhost",
             6099,
             log_level="error",
-            workers=24,
         )
 
         await server.run()
