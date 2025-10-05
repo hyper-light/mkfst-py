@@ -5,21 +5,17 @@ from typing import (
     Literal,
 )
 
-FieldType =Dict[
-    Literal["type"],
-    str
-]
+FieldType = Dict[Literal["type"], str]
 
 FieldMetadata = Dict[
     Literal["title", "type", "format", "description", "anyOf"] | str,
-    str | int | Any | List[FieldType]
+    str | int | Any | List[FieldType],
 ]
 
 FieldsMetadata = Dict[str, FieldMetadata]
-PropertyMetadata = Dict[
-    Literal["properties", 'required'],
-    FieldsMetadata | List[str]
-]
+PropertyMetadata = Dict[Literal["properties", "required"], FieldsMetadata | List[str]]
+
+PropertySchema = dict[Literal["$defs"], dict[str, PropertyMetadata]]
 
 SchemaType = Literal[
     "integer",

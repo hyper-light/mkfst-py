@@ -12,12 +12,21 @@ from typing import (
 )
 
 import orjson
-from pydantic import BaseModel, ValidationError
 
-from mkfst.models import HTML, Body, Cookies, FileUpload, Headers, Parameters, Query
+from mkfst.models import (
+    HTML,
+    Body,
+    Cookies,
+    FileUpload,
+    Headers,
+    Parameters,
+    Query,
+    Model,
+)
+
 
 KeyType = Literal["positional", "keyword"]
-Data = BaseModel | Body | HTML | FileUpload | str | bytes | list | dict
+Data = Model | Body | HTML | FileUpload | str | bytes | list | dict
 Json = dict | list
 Raw = str | bytes
 
@@ -55,12 +64,12 @@ class Fabricator:
         required_params: List[
             Tuple[
                 str,
-                Headers | Parameters | Query | BaseModel | HTML | FileUpload | Cookies,
+                Headers | Parameters | Query | Model | HTML | FileUpload | Cookies,
             ]
         ],
         optional_params: Dict[
             str,
-            Headers | Parameters | Query | BaseModel | HTML | FileUpload | Cookies,
+            Headers | Parameters | Query | Model | HTML | FileUpload | Cookies,
         ],
     ) -> None:
         self.optional = {
@@ -105,7 +114,7 @@ class Fabricator:
                 "cookies",
             ],
             Tuple[
-                Headers | Parameters | Query | BaseModel | HTML | FileUpload | Cookies,
+                Headers | Parameters | Query | Model | HTML | FileUpload | Cookies,
                 int | None,
             ],
         ] = {}
@@ -122,7 +131,7 @@ class Fabricator:
                 Headers
                 | Parameters
                 | Query
-                | BaseModel
+                | Model
                 | Body
                 | HTML
                 | FileUpload
@@ -142,7 +151,7 @@ class Fabricator:
                 Headers
                 | Parameters
                 | Query
-                | BaseModel
+                | Model
                 | Body
                 | HTML
                 | FileUpload
@@ -269,7 +278,7 @@ class Fabricator:
             param_type = "body"
             self._body_type = "html"
 
-        elif annotation in BaseModel.__subclasses__() and annotation != Body:
+        elif annotation in Model.__subclasses__() and annotation != Body:
             self._params["body"] = (
                 annotation,
                 position,
@@ -483,7 +492,7 @@ class Fabricator:
                 self._headers_key_type == "positional",
             )
 
-        except ValidationError as validation_error:
+        except Exception as validation_error:
             return (
                 data,
                 validation_error,
@@ -538,7 +547,7 @@ class Fabricator:
                 positional,
             )
 
-        except ValidationError as validation_error:
+        except Exception as validation_error:
             return (
                 None,
                 validation_error,
@@ -567,7 +576,7 @@ class Fabricator:
                 positional,
             )
 
-        except ValidationError as validation_error:
+        except Exception as validation_error:
             return (
                 None,
                 validation_error,
@@ -578,16 +587,18 @@ class Fabricator:
         self,
         params: Dict[str, Any],
     ):
+        positional = self._params_key_type == "positional"
         try:
             annotation: Type[Parameters] = self._get_annotation(
                 self._params_key, self._params_key_type
             )
+
             parameters = annotation(**params)
 
-            return (parameters, None, self._body_key_type == "positional")
+            return (parameters, None, positional)
 
-        except ValidationError as validation_error:
-            return (None, validation_error, self._body_key_type == "positional")
+        except Exception as validation_error:
+            return (None, validation_error, positional)
 
     def _parse_query(self, query: str):
         try:
@@ -596,7 +607,7 @@ class Fabricator:
 
             return (parsed_query, None, self._body_key_type == "positional")
 
-        except ValidationError as validation_error:
+        except Exception as validation_error:
             return (None, validation_error, self._body_key_type == "positional")
 
     def _get_annotation(
@@ -604,8 +615,10 @@ class Fabricator:
         key: int | str,
         key_type: KeyType,
     ):
-        return (
+        annotation_data = (
             self._ordered_params[key]
             if key_type == "positional"
             else self._unordered_params[key]
         )
+
+        return annotation_data[1]

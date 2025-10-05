@@ -1,50 +1,53 @@
-from typing import List, Set
+import msgspec
+from typing import (
+    Any,
+    Dict,
+    List,
+    Literal,
+    Set,
+)
+
 
 from mkfst.models.http import Headers, Parameters, Query
 
 from .models import Parameter
-from .parsed_types import FieldMetadata, FieldsMetadata, FieldType, PropertyMetadata
+from .parsed_types import FieldMetadata, FieldsMetadata, FieldType, PropertySchema
 
 
 def parse_type(field: FieldMetadata) -> List[str] | str:
     field_data: List[FieldType] = field.get("anyOf")
     if field_data:
-        return {
-            'enum': [
-                field_type.get("type") for field_type in field_data
-            ]
-        }
-    
-    return {
-        'type': field.get("type", "string")
-    }
+        return {"enum": [field_type.get("type") for field_type in field_data]}
+
+    return {"type": field.get("type", "string")}
 
 
 def format_header_name(name: str):
-    return '-'.join([
-        segment.capitalize() for segment in name.split('_')
-    ])
+    return "-".join([segment.capitalize() for segment in name.split("_")])
+
 
 def parse_param(
     param: type[Headers] | type[Parameters] | type[Query],
-    path_params: Set[str]
+    path_params: Set[str],
 ) -> Parameter:
+    schema: PropertySchema = msgspec.json.schema(param)
 
-    schema: PropertyMetadata = param.model_json_schema()
-    metadata: FieldsMetadata = schema.get('properties')
-    required = schema.get('required', [])
+    schema_properties = schema.get(
+        "$defs",
+        {},
+    ).get(param.__name__, {})
 
-    fields = list(param.model_fields.keys())
+    metadata: FieldsMetadata = schema_properties.get("properties")
+    required = schema.get("required", [])
 
-    if param == Parameters:
-        fields = [
-            field for field in fields if field in path_params
-        ]
+    fields = list(param.__struct_fields__)
 
-        additional_params = list(filter(
-            lambda path_param: path_param not in fields,
-            path_params
-        ))
+    if param in [Parameters]:
+        fields = [field for field in fields if field in path_params]
+
+        additional_params = list(
+            filter(lambda path_param: path_param not in fields, path_params)
+        )
 
         for path_param in additional_params:
             metadata[path_param] = {
@@ -56,33 +59,28 @@ def parse_param(
 
     location: str | None = None
 
-    if param == Headers or param in Headers.__subclasses__():
-        location = 'header'
+    if param in [Headers] or param in Headers.__subclasses__():
+        location = "header"
 
-    elif param == Query or param in Query.__subclasses__():
-        location = 'query'
+    elif param in [Query] or param in Query.__subclasses__():
+        location = "query"
 
-    elif param == Parameters or param in Parameters.__subclasses__():
-        location = 'path'
+    elif param in [Parameters] or param in Parameters.__subclasses__():
+        location = "path"
 
     else:
-        location = 'cookie'
+        location = "cookie"
 
     return [
         {
-            'name': format_header_name(
-                field
-            ) if location == 'header' else field,
-            'description': f'{field} header',
-            'required': field in required,
-            'in': location,
-            'schema': {
-                **parse_type(
-                    metadata.get(field)
-                ),
-                'format': metadata.get(
-                    field, {}
-                ).get('format')
-            }
-        } for field in fields
+            "name": format_header_name(field) if location == "header" else field,
+            "description": f"{field} header",
+            "required": field in required,
+            "in": location,
+            "schema": {
+                **parse_type(metadata.get(field)),
+                "format": metadata.get(field, {}).get("format"),
+            },
+        }
+        for field in fields
     ]

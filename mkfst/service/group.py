@@ -13,9 +13,8 @@ from typing import (
     Tuple,
     get_args,
     get_type_hints,
+    get_origin,
 )
-
-from pydantic import BaseModel
 
 from mkfst.connection.tcp.fabricator import Fabricator
 from mkfst.docs import (
@@ -30,8 +29,13 @@ from mkfst.middleware.base.base_wrapper import BaseWrapper
 from mkfst.models.http import (
     HTML,
     FileUpload,
+    Model,
 )
 from mkfst.tasks import TaskRunner
+from .parse_to_source_type import parse_to_source_type
+
+
+Json = dict | list
 
 Tag = Dict[Literal["value", "description", "docs_description", "docs_url"], str]
 
@@ -97,8 +101,8 @@ class Group:
         events: Dict[str, Coroutine] = {}
         match_routes: Dict[str, Dict[str, Callable[..., Awaitable[Any]]]] = {}
 
-        request_parsers: Dict[str, BaseModel] = {}
-        response_parsers: Dict[BaseModel, Tuple[Callable[[Any], str], int]] = {}
+        request_parsers: Dict[str, Model | dict | list | str] = {}
+        response_parsers: Dict[Model, Tuple[Callable[[Any], str], int]] = {}
 
         middleware_enabled: Dict[str, bool] = {}
 
@@ -137,17 +141,18 @@ class Group:
                     if (
                         (args := get_args(param_type.annotation))
                         and len(args) > 0
-                        and args[0] in BaseModel.__subclasses__()
+                        and args[0] in Model.__subclasses__()
                     )
                 }
             )
 
             routes[handler.path] = {method: endpoint for method in handler.methods}
+            methods = handler.methods
 
             if (
                 len(response_types) > 1
                 and inspect.isclass(response_types[0])
-                and response_types[0] in BaseModel.__subclasses__()
+                and response_types[0] in Model.__subclasses__()
             ):
                 model = response_types[0]
                 status_code = response_types[1]
@@ -155,18 +160,34 @@ class Group:
                 response_parsers[path] = (model, status_code)
 
             elif (
-                len(response_types) > 0
-                and response_types[0] in BaseModel.__subclasses__()
+                len(response_types) > 0 and response_types[0] in Model.__subclasses__()
             ):
                 model = response_types[0]
 
                 response_parsers[path] = (model, 200)
 
-            elif return_type in BaseModel.__subclasses__() or return_type in [
-                HTML,
-                FileUpload,
-            ]:
-                response_parsers[path] = (return_type, 200)
+            elif return_type in get_args(Json) or get_origin(return_type) in get_args(
+                Json
+            ):
+                response_parsers.update(
+                    {
+                        f"{method}_{handler.path}": (
+                            parse_to_source_type(
+                                return_type,
+                            ),
+                            200,
+                        )
+                        for method in methods
+                    }
+                )
+
+            elif return_type in Model.__subclasses__():
+                response_parsers.update(
+                    {
+                        f"{method}_{handler.path}": (return_type, 200)
+                        for method in methods
+                    }
+                )
 
             if isinstance(handler.responses, dict):
                 responses = handler.responses
@@ -175,7 +196,7 @@ class Group:
                     {
                         path: (response_model, status)
                         for status, response_model in responses.items()
-                        if (issubclass(response_model, BaseModel))
+                        if (issubclass(response_model, Model))
                     }
                 )
 
@@ -233,7 +254,7 @@ class Group:
     def _gather_hooks(self):
         reserved = ["connect", "close"]
         endpoints: Dict[
-            str, Callable[..., Awaitable[BaseModel | Dict[Any, Any] | str]]
+            str, Callable[..., Awaitable[Model | Dict[Any, Any] | str]]
         ] = {}
         tasks: Dict[str, Callable[[], Awaitable[Any]]] = {}
         fabricators: Dict[str, Fabricator] = {}
@@ -289,7 +310,7 @@ class Group:
                 if (
                     len(response_types) > 1
                     and inspect.isclass(response_types[0])
-                    and response_types[0] in BaseModel.__subclasses__()
+                    and response_types[0] in Model.__subclasses__()
                 ):
                     model = response_types[0]
                     status_code = response_types[1]
@@ -301,7 +322,7 @@ class Group:
 
                 elif (
                     len(response_types) > 0
-                    and response_types[0] in BaseModel.__subclasses__()
+                    and response_types[0] in Model.__subclasses__()
                 ):
                     model = response_types[0]
                     responses[200] = model

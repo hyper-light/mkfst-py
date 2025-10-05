@@ -1,23 +1,27 @@
 import asyncio
 import datetime
 
-from pydantic import BaseModel, StrictStr
+from mkfst import (
+    HTML,
+    Group,
+    Service,
+    endpoint,
+    Model,
+)
 
-from mkfst import HTML, Group, Service, endpoint
 
-
-class MetadataV2(BaseModel):
+class MetadataV2(Model):
     accessed: datetime.datetime
 
 
-class MetadataV1(BaseModel):
+class MetadataV1(Model):
     created: datetime.datetime
     updated: datetime.datetime
 
 
-class User(BaseModel):
-    username: StrictStr
-    password: StrictStr
+class User(Model):
+    username: str
+    password: str
     metadata: MetadataV1 | MetadataV2
 
 
@@ -80,8 +84,7 @@ async def run_server():
         ],
     )
 
-    await server.start_server()
-    await server.run_forever()
+    await server.run()
 
 
 asyncio.run(run_server())

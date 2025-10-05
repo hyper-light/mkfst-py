@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import collections
+from functools import lru_cache
 from typing import (
     Any,
     Dict,
@@ -18,18 +19,6 @@ VariablePartsType = Tuple[tuple, Tuple[str, str]]
 
 class RouteError(Exception):
     """Base error for any exception raised by Kua"""
-
-
-def depth_of(parts: Sequence[str]) -> int:
-    """
-    Calculate the depth of URL parts
-
-    :param parts: A list of URL parts
-    :return: Depth of the list
-
-    :private:
-    """
-    return len(parts) - 1
 
 
 def normalize_url(url: str) -> str:
@@ -181,7 +170,10 @@ class Router:
 
     _VAR_ANY_BREAK = ":*break"
 
-    def __init__(self, max_depth: int = 40) -> None:
+    def __init__(
+        self,
+        max_depth: int = 40,
+    ) -> None:
         """
         :ivar _routes: \
         Contain a graph with the parts of\
@@ -208,30 +200,11 @@ class Router:
         #   },
         #   ...
         # }
-        self._routes = {}
+        self._routes: dict[str, RouteResolved] = {}
         self._max_depth = max_depth
 
-    def _deconstruct_url(self, url: str) -> List[str]:
-        """
-        Split a regular URL into parts
-
-        :param url: A normalized URL
-        :return: Parts of the URL
-        :raises kua.routes.RouteError: \
-        If the depth of the URL exceeds\
-        the max depth of the deepest\
-        registered pattern
-
-        :private:
-        """
-        parts = url.split("/", self._max_depth + 1)
-
-        if depth_of(parts) > self._max_depth:
-            return None
-
-        return parts
-
-    def _match(self, parts: Sequence[str]) -> ResolvedRoute:
+    @lru_cache(maxsize=1024)
+    def match(self, url: str) -> ResolvedRoute:
         """
         Match URL parts to a registered pattern.
 
@@ -244,6 +217,18 @@ class Router:
 
         :private:
         """
+
+        if url.startswith("/"):
+            url = url[1:]
+
+        if url.endswith("/"):
+            url = url[:-1]
+
+        parts = url.split("/", self._max_depth + 1)
+
+        if (len(parts) - 1) > self._max_depth:
+            return None
+
         route_match: Optional[Route] = None  # type: RouteResolved
         route_variable_parts = tuple()  # type: VariablePartsType
         # (route_partial, variable_parts, depth)
@@ -304,18 +289,6 @@ class Router:
             anything=route_match.anything,
         )
 
-    def match(self, url: str):
-        """
-        Match a URL to a registered pattern.
-
-        :param url: URL
-        :return: Matched route
-        :raises kua.RouteError: If there is no match
-        """
-        url = normalize_url(url)
-        if parts := self._deconstruct_url(url):
-            return self._match(parts)
-
     def add(self, full_url: str, anything: Any) -> None:
         """
         Register a URL pattern into\
@@ -354,4 +327,4 @@ class Router:
             anything=anything,
         )
 
-        self._max_depth = max(self._max_depth, depth_of(parts))
+        self._max_depth = max(self._max_depth, len(parts) - 1)

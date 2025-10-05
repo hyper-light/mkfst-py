@@ -39,6 +39,7 @@ from .parsed_endpoint_metadata import (
 )
 from .parsed_operation_metadata import ParsedOperationMetadata
 from .parsed_tag import ParsedTag
+from .parsed_types import FieldMetadata, SchemaType, FieldType
 
 
 Json = dict | list
@@ -48,24 +49,6 @@ Raw = str | bytes
 JSON = Dict[HTTPEncodable, HTTPEncodable] | List[HTTPEncodable]
 REF_TEMPLATE = "#/components/schemas/{model}"
 
-FieldType = Dict[Literal["type"], str]
-
-FieldMetadata = Dict[
-    Literal["title", "type", "format", "description", "anyOf"] | str,
-    str | int | Any | List[FieldType],
-]
-
-FieldsMetadata = Dict[str, FieldMetadata]
-PropertyMetadata = Dict[Literal["properties"], FieldsMetadata]
-
-SchemaType = Literal[
-    "integer",
-    "string",
-    "boolean",
-    "number",
-    "array",
-    "object",
-]
 
 ParamType = type[Parameter] | type[Header] | type[Query]
 
@@ -231,20 +214,21 @@ class EndpointParser:
 
         required = "body" in self.required
 
-        if self.body == FileUpload or self.body in FileUpload.__subclasses__():
+        if self.body in [FileUpload] or self.body in FileUpload.__subclasses__():
             if content_type is None:
                 content_type = "application/octet-stream"
 
-            body_config = self.body.model_fields
+            body_config = self.body.defaults()
+
             body_content_type = body_config.get("content_type")
             body_encoding = body_config.get("encoding")
 
-            if body_content_type and body_content_type.default:
-                content_type = body_content_type.default
+            if body_content_type:
+                content_type = body_content_type
 
             encoding: str | None = None
             if body_encoding:
-                encoding = body_encoding.default
+                encoding = body_encoding
 
             return {
                 "description": self.body.__doc__,
@@ -264,7 +248,7 @@ class EndpointParser:
                 "required": required,
             }
 
-        elif self.body == HTML or self.body in HTML.__subclasses__():
+        elif self.body in [HTML] or self.body in HTML.__subclasses__():
             if content_type is None:
                 content_type = "text/html"
 
@@ -278,7 +262,7 @@ class EndpointParser:
                             "contentMediaType": "text/html",
                             "contentEncoding": "utf-8",
                             "examples": self.body.model_json_schema(
-                                ref_template=REF_TEMPLATE
+                                ref_template=REF_TEMPLATE,
                             ).get("examples"),
                         },
                     }
@@ -291,7 +275,18 @@ class EndpointParser:
         elif (
             self.body in BaseModel.__subclasses__()
             or self.body in RootModel.__subclasses__()
+            or self.body in [BaseModel, RootModel]
         ):
+            # schema: PropertySchema = msgspec.json.schema_components(
+            #     [self.body],
+            #     ref_template=REF_TEMPLATE.format(model=self.body.__name__),
+            # )
+
+            # schema_properties = schema.get(
+            #     "$defs",
+            #     {},
+            # ).get(self.body.__name__, {})
+
             body_schema = self.body.model_json_schema(ref_template=REF_TEMPLATE)
 
             if content_type is None:
@@ -422,20 +417,20 @@ class EndpointParser:
         if self._content_type:
             content_type = self._content_type
 
-        if response == FileUpload or response in FileUpload.__subclasses__():
+        if response in [FileUpload] or response in FileUpload.__subclasses__():
             if content_type is None:
                 content_type = "application/octet-stream"
 
-            response_config = response.model_fields
+            response_config = response.defaults()
             response_content_type = response_config.get("content_type")
             response_encoding = response_config.get("encoding")
 
-            if response_content_type and response_content_type.default:
-                content_type = response_content_type.default
+            if response_content_type:
+                content_type = response_content_type
 
             encoding: str | None = None
             if response_encoding:
-                encoding = response_encoding.default
+                encoding = response_encoding
 
             return {
                 content_type: {
@@ -448,7 +443,7 @@ class EndpointParser:
                 },
             }
 
-        elif response == HTML or response in HTML.__subclasses__():
+        elif response in [HTML] or response in HTML.__subclasses__():
             if content_type is None:
                 content_type = "text/html"
 

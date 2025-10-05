@@ -6,6 +6,7 @@ import re
 import time
 import socket
 from collections import defaultdict, deque
+from functools import lru_cache
 from typing import (
     Any,
     Callable,
@@ -21,7 +22,6 @@ from typing import (
 
 import orjson
 import psutil
-from pydantic import BaseModel
 
 from mkfst.connection.base.connection_type import ConnectionType
 from mkfst.env import Env
@@ -30,6 +30,7 @@ from mkfst.middleware.base.response_context import ResponseContext
 from mkfst.models.http import (
     HTTPResponse,
     parse_response,
+    Model,
 )
 from mkfst.models.logging import Event, Response, Request
 from mkfst.rate_limiting import Limiter
@@ -96,7 +97,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
         self._use_encryption = env.MERCURY_SYNC_USE_HTTP_MSYNC_ENCRYPTION
 
         self._supported_handlers: Dict[str, Dict[str, str]] = defaultdict(dict)
-        self._response_parsers: Dict[BaseModel, Tuple[Callable[[Any], str], int]] = {}
+        self._response_parsers: Dict[Model, Tuple[Callable[[Any], str], int]] = {}
         self._response_headers: Dict[str, Dict[str, Any]] = {}
 
         self._middleware_enabled: Dict[str, bool] = {}
@@ -182,43 +183,14 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
             ip_address, _ = transport.get_extra_info("peername")
 
             try:
-                if self._use_encryption:
-                    encrypted_data = self._encryptor.decrypt(data)
-                    data = self._decompressor.decompress(encrypted_data)
-
-                lines = data.maybe_extract_lines()
-                if lines is None and data.is_next_line_obviously_invalid_request_line():
-                    raise Exception("Bad request line")
-
-                elif lines is None:
-                    raise Exception("No lines received")
-
-                if not lines:
-                    raise Exception("No lines received")
-
-                matches = validate(
-                    request_line_re, lines[0], "illegal request line: {!r}", lines[0]
-                )
-
-                request_headers = {
-                    matches["field_name"].decode(): matches["field_value"].decode()
-                    for matches in [
-                        validate(
-                            header_field_re, line, "illegal header line: {!r}", line
-                        )
-                        for line in _obsolete_line_fold(lines[1:])
-                    ]
-                }
-
-                request_method = matches.get("method", b"")
-                request_version = matches.get("version", b"HTTP/1.1")
-                request_path = matches.get("target", b"")
-
-                request_method = request_method.decode()
-                request_path = request_path.decode()
-
-                request_data = bytes(data)
-                data.clear()
+                (
+                    request_method,
+                    request_version,
+                    request_path,
+                    request_query,
+                    request_headers,
+                    request_data,
+                ) = self._parse_buffer(data)
 
                 await ctx.log(
                     Request(
@@ -229,21 +201,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         ip_address=ip_address,
                     )
                 )
-
-                request_query: Union[str, None] = None
-                if "?" in request_path:
-                    request_path, request_query = request_path.split("?")
-
-                    await ctx.log(
-                        Request(
-                            level=LogLevel.DEBUG,
-                            message="Query received",
-                            path=request_path,
-                            method=request_method,
-                            ip_address=ip_address,
-                            query=request_query,
-                        )
-                    )
 
             except Exception as e:
                 async with self._backoff_sem:
@@ -272,31 +229,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 return
 
             handler_key = f"{request_method}_{request_path}"
-
-            cache_key: int | None = None
-            new_request: bool = True
-            if self._request_caching_enabled:
-                cache_key = hash(data)
-
-                if cached_response := self._cache.get(cache_key):
-                    response_data, status_code, _ = cached_response
-                    new_request = False
-
-                    if self._use_encryption is False:
-                        await ctx.log(
-                            Response(
-                                path=request_path,
-                                method=request_method,
-                                ip_address=ip_address,
-                                status=status_code,
-                            ),
-                            template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} - {status}",
-                        )
-
-                    if not transport.is_closing():
-                        transport.write(response_data)
-
-                    return
 
             handler: Handler | None = None
             fabricator: Fabricator | None = None
@@ -756,22 +688,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     encrypted_data = self._encryptor.encrypt(response_data)
                     response_data = self._compressor.compress(encrypted_data)
 
-                if self._request_caching_enabled and new_request:
-                    await self._cache_purge_lock.acquire()
-
-                    if len(self._cache) >= self._max_request_cache_size:
-                        oldest = max(self._cache.keys())
-                        del self._cache[oldest]
-
-                    else:
-                        self._cache[cache_key] = (
-                            response_data,
-                            status_code,
-                            time.monotonic(),
-                        )
-
-                    self._cache_purge_lock.release()
-
                 if self._use_encryption is False:
                     await ctx.log(
                         Response(
@@ -786,6 +702,9 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 transport.write(response_data)
 
             except Exception as e:
+                import traceback
+
+                print(traceback.format_exc())
                 async with self._backoff_sem:
                     await ctx.log(
                         Response(
@@ -810,6 +729,57 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         )
 
                         transport.write(server_error_respnse.prepare_response())
+
+    @lru_cache(maxsize=1024)
+    def _parse_buffer(self, data: ReceiveBuffer):
+        if self._use_encryption:
+            encrypted_data = self._encryptor.decrypt(data)
+            data = self._decompressor.decompress(encrypted_data)
+
+        lines = data.maybe_extract_lines()
+        if lines is None and data.is_next_line_obviously_invalid_request_line():
+            raise Exception("Bad request line")
+
+        elif lines is None:
+            raise Exception("No lines received")
+
+        if not lines:
+            raise Exception("No lines received")
+
+        matches = validate(
+            request_line_re, lines[0], "illegal request line: {!r}", lines[0]
+        )
+
+        request_headers = {
+            matches["field_name"].decode(): matches["field_value"].decode()
+            for matches in [
+                validate(header_field_re, line, "illegal header line: {!r}", line)
+                for line in _obsolete_line_fold(lines[1:])
+            ]
+        }
+
+        request_method = matches.get("method", b"")
+        request_version = matches.get("version", b"HTTP/1.1")
+        request_path = matches.get("target", b"")
+
+        request_method = request_method.decode()
+        request_path = request_path.decode()
+
+        request_data = bytes(data)
+        data.clear()
+
+        request_query: Union[str, None] = None
+        if "?" in request_path:
+            request_path, request_query = request_path.split("?")
+
+        return (
+            request_method,
+            request_version,
+            request_path,
+            request_query,
+            request_headers,
+            request_data,
+        )
 
     async def close(self):
         await self._limiter.close()

@@ -27,6 +27,7 @@ from typing import (
     Union,
     get_args,
     get_type_hints,
+    get_origin,
 )
 
 from pydantic import BaseModel
@@ -52,7 +53,7 @@ from mkfst.hooks import endpoint
 from mkfst.logging import Logger, LogLevelName, LoggingConfig
 from mkfst.middleware.base import Middleware
 from mkfst.middleware.base.base_wrapper import BaseWrapper
-from mkfst.models.http import HTML, FileUpload
+from mkfst.models.http import HTML, FileUpload, Model
 from mkfst.models.logging import Event
 
 from mkfst.tasks import TaskRunner
@@ -60,6 +61,9 @@ from mkfst.tasks import TaskRunner
 from .group import Group
 from .parse_to_source_type import parse_to_source_type
 from .socket import bind_tcp_socket
+
+
+Json = dict | list
 
 
 multiprocessing.allow_connection_pickling()
@@ -449,8 +453,8 @@ class Service(Generic[E]):
         )
 
     def _setup(self):
-        response_parsers: Dict[BaseModel, Tuple[Callable[[Any], str], int]] = {}
-        request_parsers: Dict[str, BaseModel] = {}
+        response_parsers: Dict[Model, Tuple[Callable[[Any], str], int]] = {}
+        request_parsers: Dict[str, Model] = {}
 
         routes = {}
 
@@ -485,19 +489,18 @@ class Service(Generic[E]):
                     if (
                         (args := get_args(param_type.annotation))
                         and len(args) > 0
-                        and args[0] in BaseModel.__subclasses__()
+                        and args[0] in Model.__subclasses__()
                     )
                 }
             )
 
             routes[handler.path] = {method: path_endpoint for method in handler.methods}
-
             methods = handler.methods
 
             if (
                 len(response_types) > 1
                 and inspect.isclass(response_types[0])
-                and response_types[0] in BaseModel.__subclasses__()
+                and response_types[0] in Model.__subclasses__()
             ):
                 model = response_types[0]
                 status_code = response_types[1]
@@ -510,8 +513,7 @@ class Service(Generic[E]):
                 )
 
             elif (
-                len(response_types) > 0
-                and response_types[0] in BaseModel.__subclasses__()
+                len(response_types) > 0 and response_types[0] in Model.__subclasses__()
             ):
                 model = response_types[0]
 
@@ -519,11 +521,7 @@ class Service(Generic[E]):
                     {f"{method}_{handler.path}": (model, 200) for method in methods}
                 )
 
-            elif (
-                return_type
-                and return_type in BaseModel.__subclasses__()
-                or (inspect.isclass(return_type) and issubclass(return_type, BaseModel))
-            ):
+            elif return_type in Model.__subclasses__():
                 response_parsers.update(
                     {
                         f"{method}_{handler.path}": (return_type, 200)
@@ -531,22 +529,17 @@ class Service(Generic[E]):
                     }
                 )
 
-            elif return_type is dict or return_type is list:
-                response_parsers.update(
-                    {
-                        f"{method}_{handler.path}": (return_type, 200)
-                        for method in methods
-                    }
-                )
-
-            elif (
-                return_type
-                and return_type in BaseModel.__subclasses__()
-                or return_type in [HTML, FileUpload]
+            elif return_type in get_args(Json) or get_origin(return_type) in get_args(
+                Json
             ):
                 response_parsers.update(
                     {
-                        f"{method}_{handler.path}": (return_type, 200)
+                        f"{method}_{handler.path}": (
+                            parse_to_source_type(
+                                return_type,
+                            ),
+                            200,
+                        )
                         for method in methods
                     }
                 )
@@ -559,7 +552,7 @@ class Service(Generic[E]):
                         f"{method}_{handler.path}": (response_model, status)
                         for method in methods
                         for status, response_model in responses.items()
-                        if (issubclass(response_model, BaseModel))
+                        if (issubclass(response_model, Model))
                     }
                 )
 
@@ -581,7 +574,7 @@ class Service(Generic[E]):
         reserved = ["connect", "close"]
 
         endpoints: Dict[
-            str, Callable[..., Awaitable[BaseModel | Dict[Any, Any] | str]]
+            str, Callable[..., Awaitable[Model | Dict[Any, Any] | str]]
         ] = {}
         fabricators: Dict[str, Fabricator] = {}
         tasks: Dict[str, Callable[[], Awaitable[Any]]] = {}
@@ -632,7 +625,7 @@ class Service(Generic[E]):
                 if (
                     len(response_types) > 1
                     and inspect.isclass(response_types[0])
-                    and response_types[0] in BaseModel.__subclasses__()
+                    and response_types[0] in Model.__subclasses__()
                 ):
                     model = response_types[0]
                     status_code = response_types[1]
@@ -644,7 +637,7 @@ class Service(Generic[E]):
 
                 elif (
                     len(response_types) > 0
-                    and response_types[0] in BaseModel.__subclasses__()
+                    and response_types[0] in Model.__subclasses__()
                 ):
                     model = response_types[0]
                     responses[200] = model

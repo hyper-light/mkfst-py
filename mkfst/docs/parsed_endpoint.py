@@ -3,17 +3,17 @@ from typing import Any, Dict, List, Literal
 from pydantic import BaseModel, StrictBytes, StrictInt, StrictStr
 
 from mkfst.models import (
-        HTML,
-        Body,
-        FileUpload,
-        Headers,
-        Parameters,
-        Query,
+    HTML,
+    Body,
+    FileUpload,
+    Headers,
+    Parameters,
+    Query,
 )
 
 from .parsed_endpoint_metadata import (
-        HTTPMethod,
-        ParsedEndpointMetadata,
+    HTTPMethod,
+    ParsedEndpointMetadata,
 )
 
 
@@ -22,7 +22,7 @@ class ParsedEndpoint(BaseModel):
     methods: List[HTTPMethod]
     endpoint_metadata: ParsedEndpointMetadata
     responses: Dict[
-        StrictInt, 
+        StrictInt,
         type[HTML]
         | type[FileUpload]
         | type[Body]
@@ -33,7 +33,7 @@ class ParsedEndpoint(BaseModel):
         | type[bytes]
         | StrictStr
         | StrictBytes
-        | None
+        | None,
     ]
     response_headers: Dict[StrictStr, Any] | None = None
     headers: type[Headers] | None = None
@@ -52,16 +52,17 @@ class ParsedEndpoint(BaseModel):
         | StrictBytes
         | None
     ) = None
-    required: List[
-        Literal[
-            "parameters",
-            "headers",
-            "query",
-            "body",
+    required: (
+        List[
+            Literal[
+                "parameters",
+                "headers",
+                "query",
+                "body",
+            ]
         ]
-    ] | None = None
+        | None
+    ) = None
 
     def to_dict(self):
-        return {
-            field: getattr(self, field) for field in self.model_fields
-        }
+        return {field: getattr(self, field) for field in self.model_fields}

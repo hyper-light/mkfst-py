@@ -1,10 +1,9 @@
 import textwrap
+from .model import Model
 
-from pydantic import BaseModel, StrictStr
 
-
-class HTML(BaseModel):
-    content: StrictStr
+class HTML(Model):
+    content: str
 
     def format(self):
         return textwrap.dedent(self.content)

@@ -69,23 +69,18 @@ class Limit(BaseModel):
         return MemoryParser(self.memory_limit).megabytes(accuracy=4)
 
     def get_key(
-        self, 
+        self,
         path: str,
-        method: str, 
-        ip_address: IPvAnyAddress, 
-        default: str = "default"
+        method: str,
+        ip_address: IPvAnyAddress,
+        default: str = "default",
     ):
         if self.limit_key is None:
             return default
 
         return self.limit_key(path, method, ip_address)
 
-    def matches(
-        self,
-        path,
-        method, 
-        ip_address: IPvAnyAddress
-    ):
+    def matches(self, path, method, ip_address: IPvAnyAddress):
         if self.rules is None:
             return True
 
@@ -94,7 +89,7 @@ class Limit(BaseModel):
         for rule in self.rules:
             matches_rules = rule(
                 path,
-                method, 
+                method,
                 ip_address,
             )
 
