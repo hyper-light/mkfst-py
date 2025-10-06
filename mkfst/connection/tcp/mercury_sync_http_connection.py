@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import re
-import time
+import functools
 import socket
 from collections import defaultdict, deque
 from functools import lru_cache
@@ -45,6 +45,7 @@ from .protocols.patterns import (
     method as method_re,
 )
 from .router import Router
+from .request_state import RequestState
 from .protocols.validate import validate
 
 Handler = Callable[..., Tuple[Any, int]]
@@ -129,6 +130,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
         self._verify_cert = env.MERCURY_SYNC_VERIFY_SSL_CERT
         self._upgrade_port = upgrade_port
         self.waiting_for_data: asyncio.Event = asyncio.Event()
+        self._runner_task: asyncio.Task | None = None
 
     def from_env(self, env: Env):
         super().from_env(env)
@@ -180,7 +182,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
     ) -> None:
         self._pending_responses.append(
             asyncio.create_task(
-                self._route_request(
+                self._execute(
                     data,
                     transport,
                     data_ready,
@@ -188,19 +190,19 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
             )
         )
 
-    async def _route_request(
+    async def _parse(
         self,
-        data: ReceiveBuffer,
         transport: asyncio.Transport,
+        data: ReceiveBuffer,
         data_ready: asyncio.Future,
     ):
         async with self._logger.context() as ctx:
-            request_method: bytes | None = None
-            request_path: bytes | None = None
-            request_version: bytes | None = None
-            request_headers: dict[bytes, bytes] = {}
+            request_method: bytes | str | None = None
+            request_path: bytes | str | None = None
+            request_version: bytes | str | None = None
+            request_headers: dict[str, str] = {}
             request_data: bytes | None = None
-            request_query: bytes | None = None
+            request_query: str | None = None
 
             ip_address, _ = transport.get_extra_info("peername")
 
@@ -243,6 +245,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 request_path = matches.get("target", b"")
 
                 request_method = request_method.decode()
+                request_version = request_version.decode()
                 request_path = request_path.decode()
 
                 request_query: Union[str, None] = None
@@ -325,308 +328,491 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     )
                 )
 
-            except asyncio.TimeoutError:
-                async with self._backoff_sem:
-                    data.clear()
-                    status = 400
-
-                    self.waiting_for_data.set()
-
-                    await ctx.log(
-                        Response(
-                            level=LogLevel.ERROR,
-                            ip_address=ip_address,
-                            error="Timed out.",
-                            status=status,
-                        ),
-                        template="{timestamp} - {level} - {thread_id} - {ip_address}:{status}:{error}",
-                    )
-
-                    if transport.is_closing() is False:
-                        server_error_respnse = HTTPResponse(
-                            status=status,
-                            error=f"{status}: Timed out",
-                            protocol="HTTP/1.1",
-                            headers={"Content-Type": "application/json"},
-                        )
-
-                        transport.write(server_error_respnse.prepare_response())
-
-                return
-
-            except Exception as e:
-                async with self._backoff_sem:
-                    data.clear()
-                    status = 400
-
-                    self.waiting_for_data.set()
-
-                    await ctx.log(
-                        Response(
-                            level=LogLevel.ERROR,
-                            ip_address=ip_address,
-                            error=str(e),
-                            status=status,
-                        ),
-                        template="{timestamp} - {level} - {thread_id} - {ip_address}:{status}:{error}",
-                    )
-
-                    if transport.is_closing() is False:
-                        server_error_respnse = HTTPResponse(
-                            status=status,
-                            error=f"{status}: Bad Request - {str(e)}",
-                            protocol="HTTP/1.1",
-                        )
-
-                        transport.write(server_error_respnse.prepare_response())
-
-                return
-
-            handler_key = f"{request_method}_{request_path}"
-
-            handler: Handler | None = None
-            fabricator: Fabricator | None = None
-            request_params: Dict[str, str | Tuple[str]] | None = None
-
-            try:
-                handler = self.events[handler_key]
-                fabricator = self.fabricators[handler_key]
-
-                await ctx.log(
-                    Request(
-                        level=LogLevel.DEBUG,
-                        message="Exact match for route",
-                        method=request_method,
-                        path=request_path,
-                        ip_address=ip_address,
-                    )
-                )
-
-            except KeyError:
-                # Fallback to Trie router
-                if match := self.routes.match(request_path):
-                    methods_conifg: Dict[
-                        str, Dict[Literal["model", "handler"], Handler | Any]
-                    ] = match.anything
-
-                    request_path = match.route
-                    handler = methods_conifg.get(request_method)
-                    handler_key = f"{request_method}_{request_path}"
-                    request_params = match.params
-                    fabricator = self.fabricators.get(handler_key)
-
-                    await ctx.log(
-                        Request(
-                            level=LogLevel.DEBUG,
-                            message="Fallback match for route",
-                            method=request_method,
-                            path=request_path,
-                            ip_address=ip_address,
-                        )
-                    )
-
-            if handler is None:
-                async with self._backoff_sem:
-                    not_found_response = HTTPResponse(
-                        path=request_path,
-                        status=404,
-                        error="Not Found",
-                        protocol=request_version.decode(),
-                        method=request_method,
-                    )
-
-                    await ctx.log(
-                        Response(
-                            path=request_path,
-                            method=request_method,
-                            level=LogLevel.ERROR,
-                            ip_address=ip_address,
-                            error="Failed to match route",
-                            status=404,
-                        ),
-                        template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} {error}",
-                    )
-
-                    if transport.is_closing() is False:
-                        transport.write(not_found_response.prepare_response())
-
-                    return
-
-            elif fabricator is None:
-                async with self._backoff_sem:
-                    method_not_allowed_response = HTTPResponse(
-                        path=request_path,
-                        status=405,
-                        error="Method Not Allowed",
-                        protocol=request_version.decode(),
-                        method=request_method,
-                    )
-
-                    await ctx.log(
-                        Response(
-                            path=request_path,
-                            method=request_method,
-                            level=LogLevel.ERROR,
-                            ip_address=ip_address,
-                            error="Failed to match allowed methods",
-                            status=405,
-                        ),
-                        template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} {error}",
-                    )
-
-                    if transport.is_closing() is False:
-                        transport.write(method_not_allowed_response.prepare_response())
-
-                    return
-
-            try:
-                if self._rate_limiting_enabled:
-                    await ctx.log(
-                        Request(
-                            level=LogLevel.DEBUG,
-                            message="Entered rate limiting",
-                            method=request_method,
-                            path=request_path,
-                            ip_address=ip_address,
-                        ),
-                    )
-
-                    rejected = await self._limiter.limit(
-                        ipaddress.ip_address(ip_address),
+                return (
+                    RequestState.ROUTE,
+                    (
                         request_path,
+                        request_version,
                         request_method,
-                        limit=handler.limit,
+                        request_headers,
+                        request_query,
+                        request_data,
+                        ip_address,
+                    ),
+                )
+
+            except (asyncio.TimeoutError, Exception) as error:
+                request_status = 400
+                request_error = f"Bad Request - {str(error)}"
+                if isinstance(error, asyncio.TimeoutError):
+                    request_status = 408
+                    request_error = (
+                        f"Request exceeded timeout of {self._request_timeout} seconds"
                     )
 
+                if isinstance(request_path, bytes):
+                    request_path = request_path.decode()
+
+                if isinstance(request_version, bytes):
+                    request_version = request_version.decode()
+
+                if isinstance(request_method, bytes):
+                    request_method = request_method.decode()
+
+                return (
+                    RequestState.ERROR,
+                    (
+                        request_path,
+                        request_version,
+                        request_method,
+                        request_headers,
+                        request_error,
+                        [{"error": request_error}],
+                        request_status,
+                        ip_address,
+                    ),
+                )
+
+    def _route(
+        self,
+        request_path: str,
+        request_version: str,
+        request_method: str,
+        request_headers: dict[str, str],
+        request_query: str | None,
+        request_data: bytes,
+        ip_address: str,
+    ):
+        handler_key = f"{request_method}_{request_path}"
+
+        handler: Handler | None = None
+        fabricator: Fabricator | None = None
+        request_params: Dict[str, str | Tuple[str]] | None = None
+
+        try:
+            handler = self.events[handler_key]
+            fabricator = self.fabricators[handler_key]
+
+        except KeyError:
+            # Fallback to Trie router
+            if match := self.routes.match(request_path):
+                methods_conifg: Dict[
+                    str, Dict[Literal["model", "handler"], Handler | Any]
+                ] = match.anything
+
+                request_path = match.route
+                handler = methods_conifg.get(request_method)
+                handler_key = f"{request_method}_{request_path}"
+                request_params = match.params
+                fabricator = self.fabricators.get(handler_key)
+
+        if handler is None:
+            return (
+                RequestState.ERROR,
+                (
+                    request_path,
+                    request_version,
+                    request_method,
+                    request_headers,
+                    "Failed to match route",
+                    [{"error": f"No route matching {request_path}"}],
+                    404,
+                    ip_address,
+                ),
+            )
+
+        elif fabricator is None:
+            return (
+                RequestState.ERROR,
+                (
+                    request_path,
+                    request_version,
+                    request_method,
+                    request_headers,
+                    "Failed to match route",
+                    [
+                        {
+                            "error": f"No route matching {request_path} for method {request_method} found"
+                        }
+                    ],
+                    405,
+                    ip_address,
+                ),
+            )
+
+        has_middleware = self._middleware_enabled.get(handler_key)
+
+        args, kwargs, validation_error = fabricator.parse(
+            request_data,
+            request_headers=request_headers,
+            request_query=request_query,
+            request_params=request_params,
+            has_middleware=has_middleware,
+        )
+
+        if validation_error:
+            return (
+                RequestState.ERROR,
+                (
+                    request_path,
+                    request_version,
+                    request_method,
+                    request_headers,
+                    "Unprocessable Content",
+                    [
+                        {
+                            "error": str(validation_error),
+                        }
+                    ],
+                    422,
+                    ip_address,
+                ),
+            )
+
+        next_state = (
+            request_path,
+            request_version,
+            request_method,
+            request_headers,
+            request_query,
+            request_params,
+            request_data,
+            handler_key,
+            handler,
+            fabricator,
+            args,
+            kwargs,
+            ip_address,
+        )
+
+        if self._rate_limiting_enabled:
+            return (
+                RequestState.RATE_LIMIT,
+                next_state,
+            )
+
+        elif has_middleware:
+            return (
+                RequestState.MIDDLEWARE,
+                next_state,
+            )
+
+        return (
+            RequestState.HANDLE,
+            (
+                request_path,
+                request_version,
+                request_method,
+                handler_key,
+                handler,
+                args,
+                kwargs,
+                ip_address,
+            ),
+        )
+
+    async def _rate_limit(
+        self,
+        transport: asyncio.Transport,
+        request_path: str,
+        request_version: str,
+        request_method: str,
+        request_headers: dict[str, str],
+        request_query: str | None,
+        request_params: dict[str, str] | None,
+        request_data: bytes,
+        handler_key: str,
+        handler: Callable[..., Any],
+        fabricator: Fabricator,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        ip_address: str,
+    ):
+        async with self._logger.context() as ctx:
+            try:
+                await ctx.log(
+                    Request(
+                        level=LogLevel.DEBUG,
+                        message="Entered rate limiting",
+                        method=request_method,
+                        path=request_path,
+                        ip_address=ip_address,
+                    ),
+                )
+
+                rejected = await self._limiter.limit(
+                    ipaddress.ip_address(ip_address),
+                    request_path,
+                    request_method,
+                    limit=handler.limit,
+                )
+
+                next_state = (
+                    request_path,
+                    request_version,
+                    request_method,
+                    request_headers,
+                    request_query,
+                    request_params,
+                    request_data,
+                    handler_key,
+                    handler,
+                    fabricator,
+                    args,
+                    kwargs,
+                    ip_address,
+                )
+
+                await ctx.log(
+                    Request(
+                        level=LogLevel.DEBUG,
+                        message=f"Rate limiting returned status - {rejected}",
+                        method=request_method,
+                        path=request_path,
+                        ip_address=ip_address,
+                    ),
+                )
+
+                if rejected and transport.is_closing() is False:
+                    return (
+                        RequestState.ABORTED,
+                        (
+                            request_path,
+                            request_method,
+                            "Too May Requests",
+                            [
+                                {
+                                    "error": "Rejected by rate limiting and transport closed - aborting request",
+                                }
+                            ],
+                            429,
+                            ip_address,
+                        ),
+                    )
+
+                elif rejected:
+                    return (
+                        RequestState.ABORTED,
+                        (
+                            request_path,
+                            request_method,
+                            "Too Many Requests",
+                            [{"error": "Rejected by rate limiting"}],
+                            429,
+                            ip_address,
+                        ),
+                    )
+
+                elif self._middleware_enabled.get(handler_key):
                     await ctx.log(
                         Request(
                             level=LogLevel.DEBUG,
-                            message=f"Rate limiting returned status - {rejected}",
+                            message="Middleware found",
                             method=request_method,
                             path=request_path,
                             ip_address=ip_address,
                         ),
                     )
 
-                    if rejected and transport.is_closing() is False:
-                        async with self._backoff_sem:
-                            await ctx.log(
-                                Response(
-                                    path=request_path,
-                                    method=request_method,
-                                    level=LogLevel.ERROR,
-                                    ip_address=ip_address,
-                                    error="Rejected by rate limiting",
-                                    status=429,
-                                ),
-                                template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} {error}",
-                            )
+                    return (
+                        RequestState.MIDDLEWARE,
+                        next_state,
+                    )
 
-                            too_many_requests_response = HTTPResponse(
-                                path=request_path,
-                                status=429,
-                                error="Too Many Requests",
-                                protocol=request_version.decode(),
-                                method=request_method,
-                            )
+                return (
+                    RequestState.HANDLE,
+                    next_state,
+                )
 
-                            transport.write(
-                                too_many_requests_response.prepare_response()
-                            )
-
-                            return
-
-                    elif rejected:
-                        await ctx.log(
-                            Response(
-                                path=request_path,
-                                method=request_method,
-                                level=LogLevel.ERROR,
-                                ip_address=ip_address,
-                                error="Rejected by rate limiting and transport closed - aborting request",
-                                status=429,
-                            ),
-                            template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} {error}",
-                        )
-
-                        async with self._backoff_sem:
-                            transport.close()
-
-                            return
-
-                has_middleware = self._middleware_enabled.get(handler_key)
-
-                await ctx.log(
-                    Request(
-                        level=LogLevel.DEBUG,
-                        message=(
-                            "Middleware found"
-                            if has_middleware
-                            else "No middleware found"
-                        ),
-                        method=request_method,
-                        path=request_path,
-                        ip_address=ip_address,
+            except Exception as error:
+                return (
+                    RequestState.ERROR,
+                    (
+                        request_path,
+                        request_version,
+                        request_method,
+                        request_headers,
+                        "Internal Error",
+                        [
+                            {
+                                "error": str(error),
+                            }
+                        ],
+                        500,
+                        ip_address,
                     ),
                 )
 
-                args, kwargs, validation_error = fabricator.parse(
-                    request_data,
-                    request_headers=request_headers,
-                    request_query=request_query,
-                    request_params=request_params,
-                    has_middleware=has_middleware,
+    async def _run_middleware(
+        self,
+        transport: asyncio.Transport,
+        request_path: str,
+        request_version: str,
+        request_method: str,
+        request_headers: dict[str, str],
+        request_query: str | None,
+        request_params: dict[str, str] | None,
+        request_data: bytes,
+        handler_key: str,
+        handler: Callable[..., Any],
+        fabricator: Fabricator,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        ip_address: str,
+    ):
+        async with self._logger.context() as ctx:
+            try:
+                (response_parser, status_code) = self._response_parsers.get(
+                    handler_key, (None, None)
                 )
 
-                await ctx.log(
-                    Request(
-                        level=LogLevel.DEBUG,
-                        message="Fabricator parsed args",
-                        method=request_method,
-                        path=request_path,
-                        ip_address=ip_address,
-                    ),
-                )
-
-                if validation_error:
+                if status_code is None:
+                    status_code = 200
                     await ctx.log(
-                        Response(
-                            path=request_path,
+                        Request(
+                            level=LogLevel.DEBUG,
+                            message=f"Set status code to default - {status_code}",
                             method=request_method,
-                            level=LogLevel.ERROR,
+                            path=request_path,
                             ip_address=ip_address,
-                            error=f"Rejected by request validation - {str(validation_error)}",
-                            status=422,
                         ),
-                        template="{timestamp} - {level} - {ip_address}:{status} - {method} {path} {error}",
                     )
 
-                    invalid_request_response = HTTPResponse(
-                        path=request_path,
-                        status=422,
-                        error=f"Validation error - {str(validation_error)}",
-                        protocol=request_version.decode(),
+                context = ResponseContext(
+                    request_path,
+                    request_method,
+                    request_headers,
+                    request_params,
+                    request_query,
+                    request_data,
+                    args,
+                    kwargs,
+                    fabricator,
+                    response_parser,
+                    ip_address,
+                    "https" if bool(transport.get_extra_info("sslcontext")) else "http",
+                    transport.get_extra_info("sockname"),
+                    self._upgrade_port,
+                )
+
+                await ctx.log(
+                    Request(
+                        level=LogLevel.DEBUG,
+                        message=f"Executing route handler with middleware - {handler.__class__.__name__}",
                         method=request_method,
-                        headers={"content-type": "application/json"},
-                    )
+                        path=request_path,
+                        ip_address=ip_address,
+                    ),
+                )
 
-                    transport.write(invalid_request_response.prepare_response())
+                response: Tuple[ResponseContext, Any] = await handler(context=context)
 
-                    return
+                context, response_data = response
 
                 response_headers: Dict[str, str] = self._response_headers.get(
                     handler_key, {}
                 )
-                encoded_data: str = ""
+                response_headers.update(context.response_headers)
+                response_status = context.status
+
+                if len(context.errors) > 0 and transport.is_closing() is False:
+                    return (
+                        RequestState.ERROR,
+                        (
+                            request_path,
+                            request_version,
+                            request_method,
+                            {
+                                "content-type": "application/json",
+                            },
+                            "Bad Request" if response_status else "Internal Error",
+                            [
+                                {
+                                    "error": str(error),
+                                }
+                                for error in context.errors
+                            ],
+                            response_status or 500,
+                            ip_address,
+                        ),
+                    )
 
                 await ctx.log(
                     Request(
                         level=LogLevel.DEBUG,
-                        message=(
-                            f"Request - {request_method} {request_path}:{ip_address} - sending response headers - {', '.join(response_headers)}"
-                            if len(response_headers) > 0
-                            else f"Request - {request_method} {request_path}:{ip_address} - has no response headers"
-                        ),
+                        message="Completed route handler execution with middleware",
+                        method=request_method,
+                        path=request_path,
+                        ip_address=ip_address,
+                    ),
+                )
+
+                return (
+                    RequestState.COMPLETE,
+                    (
+                        request_path,
+                        request_version,
+                        request_method,
+                        response_parser,
+                        response_data,
+                        response_headers,
+                        status_code,
+                        ip_address,
+                    ),
+                )
+
+            except Exception as error:
+                return (
+                    RequestState.ERROR,
+                    (
+                        request_path,
+                        request_version,
+                        request_method,
+                        request_headers,
+                        "Internal Error",
+                        [
+                            {
+                                "error": str(error),
+                            }
+                        ],
+                        500,
+                        ip_address,
+                    ),
+                )
+
+    async def _handle(
+        self,
+        request_path: str,
+        request_version: str,
+        request_method: str,
+        handler_key: str,
+        handler: Callable[..., Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        ip_address: str,
+    ):
+        async with self._logger.context() as ctx:
+            response_headers: Dict[str, str] = self._response_headers.get(
+                handler_key, {}
+            )
+
+            try:
+                await ctx.log(
+                    Request(
+                        level=LogLevel.DEBUG,
+                        message="Executing route handler",
+                        method=request_method,
+                        path=request_path,
+                        ip_address=ip_address,
+                    ),
+                )
+
+                response_data = await handler(*args, **kwargs)
+
+                await ctx.log(
+                    Request(
+                        level=LogLevel.DEBUG,
+                        message="Completed route handler execution",
                         method=request_method,
                         path=request_path,
                         ip_address=ip_address,
@@ -649,236 +835,229 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         ),
                     )
 
-                transport.get_extra_info("")
+                (response_parser, status_code) = self._response_parsers.get(
+                    handler_key, (None, None)
+                )
 
-                if has_middleware:
-                    context = ResponseContext(
+                return (
+                    RequestState.COMPLETE,
+                    (
                         request_path,
+                        request_version,
                         request_method,
-                        request_headers,
-                        request_params,
-                        request_query,
-                        request_data,
-                        args,
-                        kwargs,
-                        fabricator,
                         response_parser,
+                        response_data,
+                        response_headers,
+                        status_code,
                         ip_address,
-                        "https"
-                        if bool(transport.get_extra_info("sslcontext"))
-                        else "http",
-                        transport.get_extra_info("sockname"),
-                        self._upgrade_port,
+                    ),
+                )
+
+            except Exception as error:
+                return (
+                    RequestState.ERROR,
+                    (
+                        request_path,
+                        request_version,
+                        request_method,
+                        response_headers,
+                        "Internal Error",
+                        [
+                            {
+                                "error": str(error),
+                            }
+                        ],
+                        500,
+                        ip_address,
+                    ),
+                )
+
+    def _complete_request(
+        self,
+        transport: asyncio.Transport,
+        request_path: str,
+        request_version: str,
+        request_method: str,
+        response_parser: Callable[..., str] | None,
+        response_data: str | None,
+        response_headers: dict[str, str],
+        response_status_code: int,
+        ip_address: str,
+    ):
+        try:
+            encoded_data: str = ""
+            if response_parser:
+                encoded_data = parse_response(response_data, response_parser)
+                content_length = len(encoded_data)
+                headers = f"content-length: {content_length}"
+
+            elif response_data:
+                encoded_data = response_data
+
+                content_length = len(response_data)
+                headers = f"content-length: {content_length}"
+
+            else:
+                headers = "content-length: 0"
+
+            for key in response_headers:
+                headers = f"{headers}\r\n{key}: {response_headers[key]}"
+
+            response_data = f"HTTP/1.1 {response_status_code} OK\r\n{headers}\r\n\r\n{encoded_data}".encode()
+
+            if self._use_encryption:
+                encrypted_data = self._encryptor.encrypt(response_data)
+                response_data = self._compressor.compress(encrypted_data)
+
+            transport.write(response_data)
+
+            return (None, ())
+
+        except Exception as error:
+            return (
+                RequestState.ERROR,
+                (
+                    request_path,
+                    request_version,
+                    request_method,
+                    response_headers,
+                    "Internal Error",
+                    [
+                        {
+                            "error": str(error),
+                        }
+                    ],
+                    500,
+                    ip_address,
+                ),
+            )
+
+    async def _execute(
+        self,
+        data: ReceiveBuffer,
+        transport: asyncio.Transport,
+        data_ready: asyncio.Future,
+    ):
+        status, args = await self._parse(
+            transport,
+            data,
+            data_ready,
+        )
+
+        try:
+            while True:
+                match status:
+                    case RequestState.ROUTE:
+                        status, args = self._route(*args)
+
+                    case RequestState.RATE_LIMIT:
+                        status, args = await self._rate_limit(transport, *args)
+
+                    case RequestState.MIDDLEWARE:
+                        status, args = await self._run_middleware(transport, *args)
+
+                    case RequestState.HANDLE:
+                        status, args = await self._handle(*args)
+
+                    case RequestState.ERROR:
+                        await self._handle_error(transport, *args)
+
+                        break
+
+                    case RequestState.COMPLETE:
+                        status, args = self._complete_request(transport, *args)
+
+                        break
+
+                    case RequestState.ABORTED:
+                        await self._abort_request(transport, *args)
+
+                        break
+
+        except Exception as error:
+            error_message = str(error)
+
+            ip_address, _ = transport.get_extra_info("peername")
+
+            await self._handle_error(
+                transport,
+                None,
+                None,
+                None,
+                None,
+                error_message,
+                [
+                    {
+                        "error": error_message,
+                    },
+                ],
+                500,
+                ip_address,
+            )
+
+    async def _handle_error(
+        self,
+        transport: asyncio.Transport,
+        request_path: str | None,
+        request_version: str | None,
+        request_method: str | None,
+        request_headers: dict[str, str] | None,
+        request_error: str,
+        request_data: list[dict[Literal["error"], str]],
+        request_status: int,
+        ip_address: str,
+    ):
+        async with self._logger.context() as ctx:
+            async with self._backoff_sem:
+                await ctx.log(
+                    Response(
+                        path=request_path,
+                        method=request_method,
+                        level=LogLevel.ERROR,
+                        ip_address=ip_address,
+                        error=request_error,
+                        status=request_status,
+                    ),
+                    template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} {error}",
+                )
+
+                if transport.is_closing() is False:
+                    server_error_respnse = HTTPResponse(
+                        path=request_path,
+                        status=request_status,
+                        error=request_error,
+                        protocol=request_version,
+                        headers=request_headers,
+                        method=request_method,
+                        data=orjson.dumps(request_data),
                     )
 
-                    await ctx.log(
-                        Request(
-                            level=LogLevel.DEBUG,
-                            message=f"Executing route handler with middleware - {handler.__class__.__name__}",
-                            method=request_method,
-                            path=request_path,
-                            ip_address=ip_address,
-                        ),
-                    )
+                    transport.write(server_error_respnse.prepare_response())
 
-                    response: Tuple[ResponseContext, Any] = await handler(
-                        context=context
-                    )
+    async def _abort_request(
+        self,
+        transport: asyncio.Transport,
+        request_path: str | None,
+        request_method: str | None,
+        request_error: str,
+        request_status: int,
+        ip_address: str,
+    ):
+        async with self._logger.context() as ctx:
+            async with self._backoff_sem:
+                await ctx.log(
+                    Response(
+                        path=request_path,
+                        method=request_method,
+                        level=LogLevel.ERROR,
+                        ip_address=ip_address,
+                        error=request_error,
+                        status=request_status,
+                    ),
+                    template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} {error}",
+                )
 
-                    context, response_data = response
-
-                    if len(context.errors) > 0 and transport.is_closing() is False:
-                        error_headers = {"content-type": "application/json"}
-
-                        errors = orjson.dumps(
-                            [
-                                {
-                                    "error": str(error),
-                                }
-                                for error in context.errors
-                            ]
-                        )
-
-                        middleware_error_response = HTTPResponse(
-                            path=request_path,
-                            status=500,
-                            error="Internal server error.",
-                            data=errors.decode(),
-                            protocol=request_version.decode(),
-                            headers=error_headers,
-                            method=request_method,
-                        )
-
-                        joined_errors = ", ".join(
-                            [str(error) for error in context.errors]
-                        )
-                        await ctx.log(
-                            Response(
-                                path=request_path,
-                                method=request_method,
-                                level=LogLevel.ERROR,
-                                ip_address=ip_address,
-                                error=f"Middleware encountered errors - {joined_errors}",
-                                status=500,
-                            ),
-                            template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} {error}",
-                        )
-
-                        transport.write(
-                            middleware_error_response.prepare_response(
-                                compression=context.compressor,
-                                compression_level=context.compression_level,
-                            )
-                        )
-
-                    await ctx.log(
-                        Request(
-                            level=LogLevel.DEBUG,
-                            message="Completed route handler execution with middleware",
-                            method=request_method,
-                            path=request_path,
-                            ip_address=ip_address,
-                        ),
-                    )
-
-                    response_headers.update(context.response_headers)
-                    status_code = context.status or status_code
-
-                else:
-                    await ctx.log(
-                        Request(
-                            level=LogLevel.DEBUG,
-                            message="Executing route handler",
-                            method=request_method,
-                            path=request_path,
-                            ip_address=ip_address,
-                        ),
-                    )
-
-                    response_data = await handler(*args, **kwargs)
-
-                    await ctx.log(
-                        Request(
-                            level=LogLevel.DEBUG,
-                            message="Completed route handler execution",
-                            method=request_method,
-                            path=request_path,
-                            ip_address=ip_address,
-                        ),
-                    )
-
-                if response_parser:
-                    await ctx.log(
-                        Request(
-                            level=LogLevel.DEBUG,
-                            message="Serializing response body",
-                            method=request_method,
-                            path=request_path,
-                            ip_address=ip_address,
-                        ),
-                    )
-
-                    encoded_data = parse_response(response_data, response_parser)
-                    content_length = len(encoded_data)
-                    headers = f"content-length: {content_length}"
-
-                    await ctx.log(
-                        Request(
-                            level=LogLevel.DEBUG,
-                            message=f"Serialized {content_length} bytes",
-                            method=request_method,
-                            path=request_path,
-                            ip_address=ip_address,
-                        ),
-                    )
-
-                elif response_data:
-                    encoded_data = response_data
-
-                    content_length = len(response_data)
-
-                    await ctx.log(
-                        Request(
-                            level=LogLevel.DEBUG,
-                            message=f"Set response body as {content_length} bytes",
-                            method=request_method,
-                            path=request_path,
-                            ip_address=ip_address,
-                        ),
-                    )
-
-                    headers = f"content-length: {content_length}"
-
-                else:
-                    headers = "content-length: 0"
-
-                    await ctx.log(
-                        Request(
-                            level=LogLevel.DEBUG,
-                            message="Response has no body",
-                            method=request_method,
-                            path=request_path,
-                            ip_address=ip_address,
-                        ),
-                    )
-
-                for key in response_headers:
-                    headers = f"{headers}\r\n{key}: {response_headers[key]}"
-
-                    await ctx.log(
-                        Request(
-                            level=LogLevel.DEBUG,
-                            message=f"Response adding header - {key}:{response_headers[key]}",
-                            method=request_method,
-                            path=request_path,
-                            ip_address=ip_address,
-                        ),
-                    )
-
-                response_data = f"HTTP/1.1 {status_code} OK\r\n{headers}\r\n\r\n{encoded_data}".encode()
-
-                if self._use_encryption:
-                    encrypted_data = self._encryptor.encrypt(response_data)
-                    response_data = self._compressor.compress(encrypted_data)
-
-                if self._use_encryption is False:
-                    await ctx.log(
-                        Response(
-                            path=request_path,
-                            method=request_method,
-                            ip_address=ip_address,
-                            status=status_code,
-                        ),
-                        template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} - {status}",
-                    )
-
-                transport.write(response_data)
-
-            except Exception as e:
-                async with self._backoff_sem:
-                    await ctx.log(
-                        Response(
-                            path=request_path,
-                            method=request_method,
-                            level=LogLevel.ERROR,
-                            ip_address=ip_address,
-                            error=str(e),
-                            status=500,
-                        ),
-                        template="{timestamp} - {level} - {thread_id} - {ip_address}:{status} - {method} {path} {error}",
-                    )
-
-                    if transport.is_closing() is False:
-                        server_error_respnse = HTTPResponse(
-                            path=request_path,
-                            status=500,
-                            error=f"Internal Error - {str(e)}",
-                            protocol=request_version.decode(),
-                            headers={"content-type": "application/json"},
-                            method=request_method,
-                        )
-
-                        transport.write(server_error_respnse.prepare_response())
+                transport.close()
 
     async def close(self):
         await self._limiter.close()

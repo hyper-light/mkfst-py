@@ -4,7 +4,7 @@ from gzip import compress as gzip_compress
 from typing import Dict, Literal, Optional, Union
 
 import orjson
-from pydantic import BaseModel, Json, StrictInt, StrictStr
+from pydantic import BaseModel, Json, StrictInt, StrictStr, ConfigDict
 from zstandard import compress as zstd_compress
 
 from mkfst.models.base.message import Message
@@ -16,17 +16,19 @@ class HTTPResponse(BaseModel):
     error: Optional[StrictStr] = None
     method: Optional[
         Literal["GET", "POST", "HEAD", "OPTIONS", "PUT", "PATCH", "DELETE"]
-    ]=None
+    ] = None
     status: Optional[StrictInt] = None
     status_message: Optional[StrictStr] = None
     params: Dict[StrictStr, StrictStr] = {}
-    headers: Dict[StrictStr, StrictStr] = {}
+    headers: dict[str, str] | None = None
     data: Optional[Union[Json, StrictStr]] = None
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def prepare_response(
         self,
-        compression: Literal['gzip', 'zstd'] | None = None,
-        compression_level: int | None = None
+        compression: Literal["gzip", "zstd"] | None = None,
+        compression_level: int | None = None,
     ):
         message = "OK"
         if self.error:
@@ -61,33 +63,26 @@ class HTTPResponse(BaseModel):
         else:
             headers = "content-length: 0"
 
-        if compression == 'gzip':
+        if compression == "gzip":
             encoded_data = b64encode(
-                gzip_compress(
-                    encoded_data.encode(), 
-                    compresslevel=compression_level
-                )
-            ).decode()
-            
-            headers = f"{headers}\r\nx-compression-encoding: {compression}"
-            content_length = len(encoded_data)
-            headers = f"content-length: {content_length}"
-
-        elif compression == 'zstd':
-            encoded_data = b64encode(
-                zstd_compress(
-                    encoded_data.encode(),
-                    level=compression_level
-                )
+                gzip_compress(encoded_data.encode(), compresslevel=compression_level)
             ).decode()
 
             headers = f"{headers}\r\nx-compression-encoding: {compression}"
             content_length = len(encoded_data)
             headers = f"content-length: {content_length}"
 
+        elif compression == "zstd":
+            encoded_data = b64encode(
+                zstd_compress(encoded_data.encode(), level=compression_level)
+            ).decode()
+
+            headers = f"{headers}\r\nx-compression-encoding: {compression}"
+            content_length = len(encoded_data)
+            headers = f"content-length: {content_length}"
 
         response_headers = self.headers
-        if response_headers:
+        if response_headers is not None:
             for key in response_headers:
                 headers = f"{headers}\r\n{key}: {response_headers[key]}"
 

@@ -78,7 +78,8 @@ class MercurySyncTCPServerProtocol(asyncio.Protocol, Generic[T]):
             self.flow.resume_writing()
 
         if exc is None:
-            self.transport.close()
+            pass
+            # self.transport.close()
             # self._unset_keepalive_if_required()
 
         self.on_con_lost.set_result(True)
