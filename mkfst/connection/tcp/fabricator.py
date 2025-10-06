@@ -290,7 +290,7 @@ class Fabricator:
             param_type = "body"
             self._body_type = "model"
 
-        elif annotation == Body:
+        elif annotation == Body or annotation in Body.__subclasses__():
             self._params["body"] = (
                 annotation,
                 position,
@@ -376,7 +376,7 @@ class Fabricator:
                 request_headers,
             )
 
-            if positional and validation_error:
+            if validation_error:
                 return (
                     None,
                     None,
@@ -391,14 +391,14 @@ class Fabricator:
 
             self.headers = headers
 
-        if self._body_key_type and request_data:
+        if self._body_key_type:
             (body, validation_error, positional) = self._parse_body(
                 request_data,
                 request_headers,
                 has_middleware=has_middleware,
             )
 
-            if positional and validation_error:
+            if validation_error:
                 return (
                     None,
                     None,
@@ -444,7 +444,7 @@ class Fabricator:
                 positional,
             ) = self._parse_params(request_params)
 
-            if positional and validation_error:
+            if validation_error:
                 return (
                     None,
                     None,
@@ -462,7 +462,7 @@ class Fabricator:
         if self._query_key_type:
             (queries, validation_error, positional) = self._parse_query(request_query)
 
-            if positional and validation_error:
+            if validation_error:
                 return (
                     None,
                     None,
@@ -516,6 +516,14 @@ class Fabricator:
             )
 
         try:
+            content_length = int(
+                request_headers.get("content-length")
+                or request_headers.get("Content-Length")
+                or 0
+            )
+            if len(request_data) < content_length:
+                raise Exception("No data")
+
             match self._body_type:
                 case "file":
                     encoding = request_headers.get("content-encoding")

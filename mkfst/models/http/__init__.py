@@ -11,5 +11,8 @@ from .request_models import Cookies as Cookies
 from .request_models import Headers as Headers
 from .request_models import Parameters as Parameters
 from .request_models import Query as Query
-from .response_models import InternalErrorSet as InternalErrorSet
+from .response_models import (
+    InternalErrorSet as InternalErrorSet,
+    BadRequestErrorSet as BadRequestErrorSet,
+)
 from .model import Model as Model

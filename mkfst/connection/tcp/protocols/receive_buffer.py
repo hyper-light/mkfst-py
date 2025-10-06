@@ -34,6 +34,15 @@ class ReceiveBuffer:
 
         return out
 
+    def read_all(self) -> bytearray:
+        data = bytes(self.buffer)
+        self.buffer.clear()
+
+        self._next_line_search = 0
+        self._multiple_lines_search = 0
+
+        return data
+
     def maybe_extract_at_most(self, count: int) -> bytearray | None:
         """
         Extract a fixed number of bytes from the buffer.
@@ -141,3 +150,5 @@ class ReceiveBuffer:
 
     def clear(self):
         self.buffer.clear()
+        self._next_line_search = 0
+        self._multiple_lines_search = 0

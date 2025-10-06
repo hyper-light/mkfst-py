@@ -7,3 +7,4 @@ from .http import InternalErrorSet as InternalErrorSet
 from .http import Model as Model
 from .http import Parameters as Parameters
 from .http import Query as Query
+from .http import BadRequestErrorSet as BadRequestErrorSet

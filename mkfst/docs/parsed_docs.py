@@ -52,7 +52,7 @@ def create_api_definition(
         schema_components.update(parser.response_components)
 
     schema = {
-        "openapi": "3.1.0",
+        "openapi": "3.1.2",
         "tags": [tag.parse() for tag in tags],
         "info": {
             "title": api_metadata.title,

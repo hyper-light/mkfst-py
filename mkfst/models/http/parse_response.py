@@ -20,7 +20,11 @@ def parse_response(
     ) or isinstance(response, FileUpload):
         return response.data.decode(response.encoding)
 
-    elif response_model == Body or isinstance(response, Body):
+    elif (
+        response_model == Body
+        or response_model in Body.__subclasses__()
+        or isinstance(response, Body)
+    ):
         return response.content.decode()
 
     elif response_model == dict or response_model == list:

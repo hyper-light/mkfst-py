@@ -1,5 +1,7 @@
 import asyncio
-from typing import Callable, Literal, Tuple
+import re
+from typing import TypeVar, Generic
+from typing import Callable, Literal, Tuple, TYPE_CHECKING
 from .flow_control import FlowControl
 from .server_state import ServerState
 from .utils import (
@@ -9,13 +11,15 @@ from .utils import (
 )
 from .receive_buffer import ReceiveBuffer
 
+T = TypeVar("T")
 
-class MercurySyncTCPServerProtocol(asyncio.Protocol):
-    def __init__(self, callback: Callable[[bytes, Tuple[str, int]], bytes]):
+
+class MercurySyncTCPServerProtocol(asyncio.Protocol, Generic[T]):
+    def __init__(self, conn: T):
         super().__init__()
         self.transport: asyncio.Transport = None
         self.loop = asyncio.get_event_loop()
-        self.callback = callback
+        self.conn = conn
         self.flow: FlowControl = None
         self.server_state = ServerState[MercurySyncTCPServerProtocol]()
         self.connections = self.server_state.connections
@@ -28,6 +32,8 @@ class MercurySyncTCPServerProtocol(asyncio.Protocol):
 
         self._receive_buffer = ReceiveBuffer()
         self._receive_buffer_closed = False
+        self._active_requests: dict[bytes, bytes] = {}
+        self._next_data: asyncio.Future = asyncio.Future()
 
     @property
     def trailing_data(self) -> tuple[bytes, bool]:
@@ -56,7 +62,14 @@ class MercurySyncTCPServerProtocol(asyncio.Protocol):
         else:
             self._receive_buffer_closed = True
 
-        self.callback(self._receive_buffer, self.transport)
+        if self.conn.waiting_for_data.is_set() is False or (self._next_data.done()):
+            self.conn.read(
+                self._receive_buffer,
+                self.transport,
+                self._next_data,
+            )
+        else:
+            self._next_data.set_result(self._receive_buffer)
 
     def connection_lost(self, exc: Exception | None):
         self.connections.discard(self)

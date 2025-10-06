@@ -16,6 +16,7 @@ from mkfst.models import (
     FileUpload,
     Headers,
     InternalErrorSet,
+    BadRequestErrorSet,
     Parameters,
     Query,
     Model,
@@ -393,6 +394,12 @@ class EndpointParser:
         if self.responses.get(422) is None:
             self.responses[422] = ValidationErrorGroup
 
+        if self.response_components.get(400) is None:
+            self.responses[400] = self._parse_response_content(BadRequestErrorSet)
+
+        if responses.get(400, {}).get("application/json") is None:
+            responses[400] = self._parse_response_content(BadRequestErrorSet)
+
         if responses.get(422, {}).get("application/json") is None:
             responses[422] = self._parse_response_content(ValidationErrorGroup)
 
@@ -468,10 +475,10 @@ class EndpointParser:
                 }
             }
 
-        elif response == Body or response in Body.__subclasses__():
+        elif response in [Body] or response in Body.__subclasses__():
             content_type = "application/octet-stream"
 
-        elif response in Model.__subclasses__():
+        elif response in [Model] or response in Model.__subclasses__():
             response_schema = response.model_json_schema(ref_template=REF_TEMPLATE)
 
             if content_type is None:

@@ -53,11 +53,10 @@ from mkfst.hooks import endpoint
 from mkfst.logging import Logger, LogLevelName, LoggingConfig
 from mkfst.middleware.base import Middleware
 from mkfst.middleware.base.base_wrapper import BaseWrapper
-from mkfst.models.http import HTML, FileUpload, Model
+from mkfst.models.http import HTML, Model
 from mkfst.models.logging import Event
 
 from mkfst.tasks import TaskRunner
-
 from .group import Group
 from .parse_to_source_type import parse_to_source_type
 from .socket import bind_tcp_socket

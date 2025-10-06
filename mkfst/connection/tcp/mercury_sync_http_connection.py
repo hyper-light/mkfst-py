@@ -38,9 +38,14 @@ from mkfst.rate_limiting import Limiter
 from .fabricator import Fabricator
 from .mercury_sync_tcp_connection import MercurySyncTCPConnection
 from .protocols.receive_buffer import ReceiveBuffer
-from .patterns import request_line, header_field, request_target, method as method_re
+from .protocols.patterns import (
+    request_line,
+    header_field,
+    request_target,
+    method as method_re,
+)
 from .router import Router
-from .validate import validate
+from .protocols.validate import validate
 
 Handler = Callable[..., Tuple[Any, int]]
 
@@ -86,7 +91,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
         super().__init__(host, port, instance_id, env)
 
         self.env = env
-        self._waiters: Deque[asyncio.Future] = deque()
+        self._waiters: dict[str, asyncio.Future] = defaultdict(asyncio.Future)
         self._connections: Dict[str, List[asyncio.Transport]] = defaultdict(list)
         self._http_socket: Union[socket.socket, None] = None
         self._hostnames: Dict[Tuple[str, int], str] = {}
@@ -123,6 +128,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
         self._request_caching_enabled = env.MERCURY_SYNC_ENABLE_REQUEST_CACHING
         self._verify_cert = env.MERCURY_SYNC_VERIFY_SSL_CERT
         self._upgrade_port = upgrade_port
+        self.waiting_for_data: asyncio.Event = asyncio.Event()
 
     def from_env(self, env: Env):
         super().from_env(env)
@@ -166,12 +172,28 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 else None,
             )
 
-    def read(self, data: ReceiveBuffer, transport: asyncio.Transport) -> None:
+    def read(
+        self,
+        data: ReceiveBuffer,
+        transport: asyncio.Transport,
+        data_ready: asyncio.Future,
+    ) -> None:
         self._pending_responses.append(
-            asyncio.create_task(self._route_request(data, transport))
+            asyncio.create_task(
+                self._route_request(
+                    data,
+                    transport,
+                    data_ready,
+                )
+            )
         )
 
-    async def _route_request(self, data: ReceiveBuffer, transport: asyncio.Transport):
+    async def _route_request(
+        self,
+        data: ReceiveBuffer,
+        transport: asyncio.Transport,
+        data_ready: asyncio.Future,
+    ):
         async with self._logger.context() as ctx:
             request_method: bytes | None = None
             request_path: bytes | None = None
@@ -195,7 +217,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     raise Exception("No lines received")
 
                 if not lines:
-                    raise Exception("No lines received")
+                    raise Exception("Request empty")
 
                 matches = validate(
                     request_line_re, lines[0], "illegal request line: {!r}", lines[0]
@@ -211,6 +233,11 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     ]
                 }
 
+                if (request_headers.get("Host", "") is None) and (
+                    request_headers.get("host") is None
+                ):
+                    raise Exception("Missing Host header")
+
                 request_method = matches.get("method", b"")
                 request_version = matches.get("version", b"HTTP/1.1")
                 request_path = matches.get("target", b"")
@@ -218,13 +245,76 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 request_method = request_method.decode()
                 request_path = request_path.decode()
 
-                request_data = bytes(data)
-                data.clear()
-
                 request_query: Union[str, None] = None
                 if "?" in request_path:
                     request_path, request_query = request_path.split("?")
 
+                request_data = b""
+                if (
+                    (expect_header := request_headers.get("Expect"))
+                    and expect_header.lower() == "100-continue"
+                    and transport.is_closing() is False
+                ):
+                    server_error_respnse = HTTPResponse(
+                        status=100,
+                        protocol="HTTP/1.1",
+                        headers=self._response_headers.get(
+                            f"{request_method}_{request_path}", {}
+                        ),
+                        path=request_path,
+                        status_message="Continue",
+                    )
+
+                    transport.write(server_error_respnse.prepare_response())
+
+                    self.waiting_for_data.set()
+                    data = await asyncio.wait_for(
+                        data_ready,
+                        timeout=self._request_timeout,
+                    )
+
+                    request_data += data.read_all()
+                    self.waiting_for_data.clear()
+
+                if request_headers.get("Transfer-Encoding") or request_headers.get(
+                    "transfer-encoding",
+                ):
+                    next_line = bytes(data.maybe_extract_next_line() or b"")
+                    chunk_size = int(next_line.rstrip(), 16)
+
+                    while next_line := data.maybe_extract_at_most(chunk_size + 2):
+                        next_line = (next_line or b"").rstrip()
+                        request_data += next_line
+
+                        chunk_size = int(bytes(data.buffer.rstrip()), 16)
+
+                        if not chunk_size:
+                            break
+
+                        self.waiting_for_data.set()
+                        data = await asyncio.wait_for(
+                            data_ready,
+                            timeout=self._request_timeout,
+                        )
+
+                        request_data += data.read_all()
+                        self.waiting_for_data.clear()
+
+                elif (content_length := request_headers.get("Content-Length")) or (
+                    content_length := request_headers.get("content-length")
+                ):
+                    content_length_amount = int(content_length)
+
+                    request_data += (
+                        data.maybe_extract_at_most(content_length_amount + 1) or b""
+                    )
+
+                elif request_method in ["POST", "PUT", "PATCH"]:
+                    raise Exception(
+                        "No Content-Length or Transfer-Encoding header supplied"
+                    )
+
+                data.clear()
                 await ctx.log(
                     Request(
                         level=LogLevel.DEBUG,
@@ -235,10 +325,41 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     )
                 )
 
+            except asyncio.TimeoutError:
+                async with self._backoff_sem:
+                    data.clear()
+                    status = 400
+
+                    self.waiting_for_data.set()
+
+                    await ctx.log(
+                        Response(
+                            level=LogLevel.ERROR,
+                            ip_address=ip_address,
+                            error="Timed out.",
+                            status=status,
+                        ),
+                        template="{timestamp} - {level} - {thread_id} - {ip_address}:{status}:{error}",
+                    )
+
+                    if transport.is_closing() is False:
+                        server_error_respnse = HTTPResponse(
+                            status=status,
+                            error=f"{status}: Timed out",
+                            protocol="HTTP/1.1",
+                            headers={"Content-Type": "application/json"},
+                        )
+
+                        transport.write(server_error_respnse.prepare_response())
+
+                return
+
             except Exception as e:
                 async with self._backoff_sem:
                     data.clear()
                     status = 400
+
+                    self.waiting_for_data.set()
 
                     await ctx.log(
                         Response(
@@ -483,8 +604,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     invalid_request_response = HTTPResponse(
                         path=request_path,
                         status=422,
-                        error="Unprocessable Content",
-                        data=validation_error.json(),
+                        error=f"Validation error - {str(validation_error)}",
                         protocol=request_version.decode(),
                         method=request_method,
                         headers={"content-type": "application/json"},

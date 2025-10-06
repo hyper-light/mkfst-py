@@ -141,14 +141,14 @@ class MercurySyncTCPConnection:
 
         if self.connected is False:
             server = await self._loop.create_server(
-                lambda: MercurySyncTCPServerProtocol(self.read),
+                lambda: MercurySyncTCPServerProtocol(self),
                 sock=self.server_socket,
                 ssl=self._server_ssl_context if self.upgrade_socket is None else None,
             )
 
             if self.upgrade_socket:
                 upgrade_server = await self._loop.create_server(
-                    lambda: MercurySyncTCPServerProtocol(self.read),
+                    lambda: MercurySyncTCPServerProtocol(self),
                     sock=self.upgrade_socket,
                     ssl=self._server_ssl_context,
                 )
