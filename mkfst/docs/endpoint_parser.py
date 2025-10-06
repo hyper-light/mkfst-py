@@ -9,7 +9,6 @@ from typing import (
     get_origin,
 )
 
-from pydantic import BaseModel, RootModel
 
 from mkfst.models import (
     HTML,
@@ -19,6 +18,7 @@ from mkfst.models import (
     InternalErrorSet,
     Parameters,
     Query,
+    Model,
 )
 from mkfst.models.http.request_models import HTTPEncodable
 from mkfst.models.validation import ValidationErrorGroup
@@ -52,6 +52,8 @@ REF_TEMPLATE = "#/components/schemas/{model}"
 
 ParamType = type[Parameter] | type[Header] | type[Query]
 
+path_pattern = re.compile(r":(\w+)")
+
 
 def parse_type(field: FieldMetadata) -> List[str] | str:
     field_data: List[FieldType] = field.get("anyOf")
@@ -77,7 +79,7 @@ def parse_response_header_type(value: HTTPEncodable):
 
 def parse_response_description(response: Any, status_code: int):
     response_description = f"Response for status code {status_code}"
-    if response in BaseModel.__subclasses__() and response.__doc__:
+    if response in Model.__subclasses__() and response.__doc__:
         response_description = response.__doc__
 
     return response_description
@@ -94,7 +96,7 @@ class EndpointParser:
             type[HTML]
             | type[FileUpload]
             | type[Body]
-            | type[BaseModel]
+            | type[Model]
             | type[dict]
             | type[list]
             | type[str]
@@ -110,7 +112,7 @@ class EndpointParser:
             type[HTML]
             | type[FileUpload]
             | type[Body]
-            | type[BaseModel]
+            | type[Model]
             | type[dict]
             | type[list]
             | type[str]
@@ -137,7 +139,16 @@ class EndpointParser:
             required = []
 
         self.path = path
-        self.path_params: Set[str] = set(re.findall("{(.*?)}", path))
+        self.path_params: Set[str] = set(path_pattern.findall(path))
+        self.cleaned_path = "/".join(
+            [
+                ("{" + f"{segment.replace(':', '')}" + "}")
+                if path_pattern.match(segment)
+                else segment
+                for segment in path.split("/")
+            ]
+        )
+
         self.methods = methods
         self.headers = headers
         self.parameters = parameters
@@ -149,7 +160,7 @@ class EndpointParser:
         self.response_headers = response_headers
         self.default_tags = default_tags
 
-        self.parsed_params: List[Parameter] = []
+        self.parsed_params: dict[str, Parameter] = {}
         self._content_type: str | None = None
 
         self.request_components: Dict[str, Any] = {}
@@ -163,7 +174,7 @@ class EndpointParser:
         ]
 
         for param in param_types:
-            self.parsed_params.extend(parse_param(param, self.path_params))
+            self.parsed_params.update(parse_param(param, self.path_params))
 
         operations: Dict[HTTPMethod, Operation] = {}
 
@@ -200,7 +211,7 @@ class EndpointParser:
         return {
             "description": self.metadata.description,
             "summary": self.metadata.summary,
-            "parameters": self.parsed_params,
+            "parameters": list(self.parsed_params.values()),
             **operations,
         }
 
@@ -272,11 +283,7 @@ class EndpointParser:
         elif self.body == Body or self.body in Body.__subclasses__():
             content_type = "application/octet-stream"
 
-        elif (
-            self.body in BaseModel.__subclasses__()
-            or self.body in RootModel.__subclasses__()
-            or self.body in [BaseModel, RootModel]
-        ):
+        elif self.body in Model.__subclasses__() or self.body in [Model]:
             # schema: PropertySchema = msgspec.json.schema_components(
             #     [self.body],
             #     ref_template=REF_TEMPLATE.format(model=self.body.__name__),
@@ -404,7 +411,7 @@ class EndpointParser:
             type[HTML]
             | type[FileUpload]
             | type[Body]
-            | type[BaseModel]
+            | type[Model]
             | type[dict]
             | type[list]
             | type[str]
@@ -464,10 +471,7 @@ class EndpointParser:
         elif response == Body or response in Body.__subclasses__():
             content_type = "application/octet-stream"
 
-        elif (
-            response in BaseModel.__subclasses__()
-            or response in RootModel.__subclasses__()
-        ):
+        elif response in Model.__subclasses__():
             response_schema = response.model_json_schema(ref_template=REF_TEMPLATE)
 
             if content_type is None:

@@ -9,22 +9,31 @@ T = TypeVar("T", bound=dict)
 class Model(msgspec.Struct):
     @classmethod
     def model_json_schema(cls, ref_template: str | None = None):
-        compoents: tuple[dict[str, dict]] = msgspec.json.schema_components(
-            [cls], ref_template=ref_template.format(model=cls.__name__)
-        )
+        if ref_template:
+            components: tuple[dict[str, dict]] = msgspec.json.schema_components(
+                [cls],
+                ref_template=ref_template.format(model=cls.__name__),
+            )
 
-        schema_properties = {}
+            schema_properties = {}
 
-        for item in compoents:
-            if isinstance(item, dict):
-                schema_properties.update(
-                    item.get(
-                        "$defs",
-                        {},
-                    ).get(cls.__name__, {})
-                )
+            for item in components:
+                if isinstance(item, dict):
+                    schema_properties.update(
+                        item.get(
+                            "$defs",
+                            {},
+                        ).get(cls.__name__, {})
+                    )
 
-        return schema_properties
+            return schema_properties
+
+        else:
+            component: dict[str, dict] = msgspec.json.schema(cls)
+            return component.get(
+                "$defs",
+                {},
+            ).get(cls.__name__, {})
 
     @classmethod
     def defaults(cls):

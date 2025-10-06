@@ -1,14 +1,6 @@
 from typing import Callable, List, Literal, Optional, Union
-
-from pydantic import (
-    BaseModel,
-    IPvAnyAddress,
-    StrictBool,
-    StrictFloat,
-    StrictInt,
-    StrictStr,
-)
-
+import msgspec
+from ipaddress import IPv4Address, IPv6Address
 from mkfst.env.memory_parser import MemoryParser
 from mkfst.env.time_parser import TimeParser
 
@@ -17,14 +9,14 @@ HTTPMethod = Literal[
 ]
 
 
-class Limit(BaseModel):
-    max_requests: Optional[StrictInt] = 1000
-    min_requests: Optional[StrictInt] = 100
-    request_period: StrictStr = "1s"
-    reject_requests: StrictBool = True
-    request_backoff: StrictStr = "1s"
-    cpu_limit: Optional[Union[StrictFloat, StrictInt]] = None
-    memory_limit: Optional[StrictStr] = None
+class Limit(msgspec.Struct):
+    max_requests: int = 1000
+    min_requests: int = 100
+    request_period: str = "1s"
+    reject_requests: bool = True
+    request_backoff: str = "1s"
+    cpu_limit: float | int | None = None
+    memory_limit: str = None
     limiter_type: Literal[
         "adaptive",
         "cpu-adaptive",
@@ -38,7 +30,7 @@ class Limit(BaseModel):
             [
                 str,
                 str,
-                IPvAnyAddress,
+                IPv4Address | IPv6Address,
             ],
             str,
         ]
@@ -49,7 +41,7 @@ class Limit(BaseModel):
                 [
                     str,
                     str,
-                    IPvAnyAddress,
+                    IPv4Address | IPv6Address,
                 ],
                 bool,
             ]
@@ -72,7 +64,7 @@ class Limit(BaseModel):
         self,
         path: str,
         method: str,
-        ip_address: IPvAnyAddress,
+        ip_address: IPv4Address | IPv6Address,
         default: str = "default",
     ):
         if self.limit_key is None:
@@ -80,7 +72,7 @@ class Limit(BaseModel):
 
         return self.limit_key(path, method, ip_address)
 
-    def matches(self, path, method, ip_address: IPvAnyAddress):
+    def matches(self, path, method, ip_address: IPv4Address | IPv6Address):
         if self.rules is None:
             return True
 

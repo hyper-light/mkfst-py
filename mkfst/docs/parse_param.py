@@ -30,15 +30,10 @@ def parse_param(
     param: type[Headers] | type[Parameters] | type[Query],
     path_params: Set[str],
 ) -> Parameter:
-    schema: PropertySchema = msgspec.json.schema(param)
-
-    schema_properties = schema.get(
-        "$defs",
-        {},
-    ).get(param.__name__, {})
+    schema_properties = param.model_json_schema()
 
     metadata: FieldsMetadata = schema_properties.get("properties")
-    required = schema.get("required", [])
+    required = schema_properties.get("required", [])
 
     fields = list(param.__struct_fields__)
 
@@ -71,8 +66,8 @@ def parse_param(
     else:
         location = "cookie"
 
-    return [
-        {
+    return {
+        format_header_name(field): {
             "name": format_header_name(field) if location == "header" else field,
             "description": f"{field} header",
             "required": field in required,
@@ -83,4 +78,4 @@ def parse_param(
             },
         }
         for field in fields
-    ]
+    }

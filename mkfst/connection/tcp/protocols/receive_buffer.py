@@ -1,3 +1,4 @@
+from __future__ import annotations
 import re
 
 blank_line_regex = re.compile(b"\n\r?\n", re.MULTILINE)

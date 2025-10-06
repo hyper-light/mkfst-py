@@ -183,14 +183,47 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
             ip_address, _ = transport.get_extra_info("peername")
 
             try:
-                (
-                    request_method,
-                    request_version,
-                    request_path,
-                    request_query,
-                    request_headers,
-                    request_data,
-                ) = self._parse_buffer(data)
+                if self._use_encryption:
+                    encrypted_data = self._encryptor.decrypt(data)
+                    data = self._decompressor.decompress(encrypted_data)
+
+                lines = data.maybe_extract_lines()
+                if lines is None and data.is_next_line_obviously_invalid_request_line():
+                    raise Exception("Bad request line")
+
+                elif lines is None:
+                    raise Exception("No lines received")
+
+                if not lines:
+                    raise Exception("No lines received")
+
+                matches = validate(
+                    request_line_re, lines[0], "illegal request line: {!r}", lines[0]
+                )
+
+                request_headers = {
+                    matches["field_name"].decode(): matches["field_value"].decode()
+                    for matches in [
+                        validate(
+                            header_field_re, line, "illegal header line: {!r}", line
+                        )
+                        for line in _obsolete_line_fold(lines[1:])
+                    ]
+                }
+
+                request_method = matches.get("method", b"")
+                request_version = matches.get("version", b"HTTP/1.1")
+                request_path = matches.get("target", b"")
+
+                request_method = request_method.decode()
+                request_path = request_path.decode()
+
+                request_data = bytes(data)
+                data.clear()
+
+                request_query: Union[str, None] = None
+                if "?" in request_path:
+                    request_path, request_query = request_path.split("?")
 
                 await ctx.log(
                     Request(
@@ -702,9 +735,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 transport.write(response_data)
 
             except Exception as e:
-                import traceback
-
-                print(traceback.format_exc())
                 async with self._backoff_sem:
                     await ctx.log(
                         Response(
@@ -729,57 +759,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         )
 
                         transport.write(server_error_respnse.prepare_response())
-
-    @lru_cache(maxsize=1024)
-    def _parse_buffer(self, data: ReceiveBuffer):
-        if self._use_encryption:
-            encrypted_data = self._encryptor.decrypt(data)
-            data = self._decompressor.decompress(encrypted_data)
-
-        lines = data.maybe_extract_lines()
-        if lines is None and data.is_next_line_obviously_invalid_request_line():
-            raise Exception("Bad request line")
-
-        elif lines is None:
-            raise Exception("No lines received")
-
-        if not lines:
-            raise Exception("No lines received")
-
-        matches = validate(
-            request_line_re, lines[0], "illegal request line: {!r}", lines[0]
-        )
-
-        request_headers = {
-            matches["field_name"].decode(): matches["field_value"].decode()
-            for matches in [
-                validate(header_field_re, line, "illegal header line: {!r}", line)
-                for line in _obsolete_line_fold(lines[1:])
-            ]
-        }
-
-        request_method = matches.get("method", b"")
-        request_version = matches.get("version", b"HTTP/1.1")
-        request_path = matches.get("target", b"")
-
-        request_method = request_method.decode()
-        request_path = request_path.decode()
-
-        request_data = bytes(data)
-        data.clear()
-
-        request_query: Union[str, None] = None
-        if "?" in request_path:
-            request_path, request_query = request_path.split("?")
-
-        return (
-            request_method,
-            request_version,
-            request_path,
-            request_query,
-            request_headers,
-            request_data,
-        )
 
     async def close(self):
         await self._limiter.close()
