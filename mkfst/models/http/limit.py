@@ -1,4 +1,5 @@
-from typing import Callable, List, Literal, Optional, Union
+from __future__ import annotations
+from typing import Callable, List, Literal, Optional
 import msgspec
 from ipaddress import IPv4Address, IPv6Address
 from mkfst.env.memory_parser import MemoryParser

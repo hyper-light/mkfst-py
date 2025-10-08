@@ -4,6 +4,7 @@ import asyncio
 import functools
 import inspect
 import multiprocessing
+
 import os
 import random
 import signal
@@ -30,7 +31,8 @@ from typing import (
     get_origin,
 )
 
-from pydantic import BaseModel
+
+import msgspec
 
 from mkfst.connection.tcp.fabricator import Fabricator
 from mkfst.connection.tcp.mercury_sync_http_connection import (
@@ -79,7 +81,7 @@ Tag = Dict[Literal["value", "description", "docs_description", "docs_url"], str]
 async def run(
     service_name: str,
     tcp_connection: MercurySyncHTTPConnection,
-    env: BaseModel,
+    env: msgspec.Struct,
     groups: List[Group],
     config: Dict[str, Union[int, socket.socket, str]] = {},
 ):
@@ -138,7 +140,7 @@ async def run(
 def start_pool(
     tcp_connection: MercurySyncHTTPConnection,
     service_name: str,
-    custom_env: BaseModel,
+    custom_env: msgspec.Struct,
     groups: List[Group],
     config: Dict[str, Union[int, socket.socket, str]] = {},
 ):
@@ -214,8 +216,9 @@ class Service(Generic[E]):
         | None = None,
         tags: List[Tag] | None = None,
     ) -> None:
-        self.env = load_env(Env, existing=env)
+        env = load_env(Env, override=env)
 
+        self.env = env
         self.name = self.__class__.__name__
         self._logging_config = LoggingConfig(level=log_level)
         self.logger = Logger()

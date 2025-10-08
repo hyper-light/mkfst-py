@@ -1,3 +1,4 @@
+from __future__ import annotations
 import msgspec
 import orjson
 from typing import TypeVar

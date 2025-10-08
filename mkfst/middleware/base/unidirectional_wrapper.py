@@ -9,7 +9,7 @@ from typing import (
     Union,
 )
 
-from pydantic import BaseModel
+import msgspec
 
 from .base_wrapper import BaseWrapper
 from .response_context import ResponseContext
@@ -31,7 +31,7 @@ class UnidirectionalWrapper(BaseWrapper):
                 ]
             ]
         ] = None,
-        responses: Optional[Dict[int, BaseModel]] = None,
+        responses: Optional[Dict[int, msgspec.Struct]] = None,
         serializers: Optional[Dict[int, Callable[..., str]]] = None,
         response_headers: Optional[Dict[str, str]] = None,
     ) -> None:

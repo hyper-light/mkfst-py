@@ -1,3 +1,4 @@
+from __future__ import annotations
 import re
 from http.cookies import SimpleCookie
 from typing import (

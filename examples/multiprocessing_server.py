@@ -17,13 +17,16 @@ class TestService(Service):
     async def get_service(self) -> str:
         return "Hello World"
 
-    @endpoint("/post", methods=["POST"])
-    async def post_data(self, data: Body) -> Body:
-        return data
+    # @endpoint(
+    #     "/post",
+    #     methods=["POST"],
+    # )
+    # async def post_data(self, data: dict) -> dict:
+    #     return data
 
-    @endpoint("/get/:id")
-    async def get_by_id(self, params: TestParams) -> str:
-        return params.id
+    # @endpoint("/get/:id")
+    # async def get_by_id(self, params: TestParams) -> str:
+    #     return params.id
 
 
 if __name__ == "__main__":

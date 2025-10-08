@@ -1,7 +1,4 @@
 from typing import Any, Type
-
-from pydantic import BaseModel
-
 from mkfst.models import HTML, FileUpload, Body, Model
 
 

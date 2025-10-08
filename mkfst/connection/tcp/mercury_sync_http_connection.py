@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import re
-import time
 import socket
 from collections import defaultdict, deque
 from functools import lru_cache
@@ -276,8 +275,14 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     request_data += data.read_all()
                     self.waiting_for_data.clear()
 
-                if request_headers.get("Transfer-Encoding") or request_headers.get(
-                    "transfer-encoding",
+                if request_method in [
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE",
+                ] and (
+                    request_headers.get("Transfer-Encoding")
+                    or request_headers.get("transfer-encoding")
                 ):
                     next_line = bytes(data.maybe_extract_next_line() or b"")
                     chunk_size = int(next_line.rstrip(), 16)
@@ -300,8 +305,9 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                         request_data += data.read_all()
                         self.waiting_for_data.clear()
 
-                elif (content_length := request_headers.get("Content-Length")) or (
-                    content_length := request_headers.get("content-length")
+                elif request_method in ["POST", "PUT", "PATCH", "DELETE"] and (
+                    (content_length := request_headers.get("Content-Length"))
+                    or (content_length := request_headers.get("content-length"))
                 ):
                     content_length_amount = int(content_length)
 

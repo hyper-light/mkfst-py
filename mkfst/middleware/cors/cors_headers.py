@@ -1,18 +1,17 @@
-from typing import Dict, List, Literal, Optional, Union
+from __future__ import annotations
+import msgspec
+from typing import Dict, Literal
 
-from pydantic import BaseModel, StrictBool, StrictFloat, StrictInt, StrictStr, conlist
 
-
-class CorsHeaders(BaseModel):
-    access_control_allow_origin: conlist(StrictStr, min_length=1)
-    access_control_expose_headers: Optional[List[StrictStr]]
-    access_control_max_age: Optional[Union[StrictInt, StrictFloat]]
-    access_control_allow_credentials: Optional[StrictBool]
-    access_control_allow_methods: conlist(
+class CorsHeaders(msgspec.Struct, kw_only=True):
+    access_control_allow_origin: list[str]
+    access_control_expose_headers: list[str] | None = None
+    access_control_max_age: int | float | None = None
+    access_control_allow_credentials: bool | None = None
+    access_control_allow_methods: list[
         Literal["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "TRACE"],
-        min_length=1,
-    )
-    access_control_allow_headers: Optional[List[StrictStr]]
+    ]
+    access_control_allow_headers: list[str] | None = None
 
     def to_headers(self):
         cors_headers: Dict[str, str] = {}

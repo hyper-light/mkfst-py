@@ -1,5 +1,4 @@
-# -*- coding: utf-8 -*-
-
+from __future__ import annotations
 import collections
 from functools import lru_cache
 from typing import (

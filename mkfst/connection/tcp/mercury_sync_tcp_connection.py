@@ -2,8 +2,18 @@ import asyncio
 import socket
 import ssl
 from collections import defaultdict, deque
-from typing import Any, Coroutine, Deque, Dict, Optional, Tuple, Union
+from typing import (
+    Any,
+    Coroutine,
+    Deque,
+    Dict,
+    Optional,
+    Tuple,
+    Union,
+    Callable,
+)
 
+import msgspec
 import zstandard
 
 from mkfst.connection.base.connection_type import ConnectionType
@@ -13,7 +23,6 @@ from mkfst.connection.tcp.protocols import (
 from mkfst.encryption import AESGCMFernet
 from mkfst.env import Env
 from mkfst.env.time_parser import TimeParser
-from mkfst.models.base.message import Message
 from mkfst.snowflake.snowflake_generator import SnowflakeGenerator
 
 
@@ -28,7 +37,7 @@ class MercurySyncTCPConnection:
         self.events: Dict[str, Coroutine] = {}
 
         self.queue: Dict[str, Deque[Tuple[str, int, float, Any]]] = defaultdict(deque)
-        self.parsers: Dict[str, Message] = {}
+        self.parsers: Dict[str, Callable[..., msgspec.Struct | str]] = {}
         self.connected = False
         self._running = False
 

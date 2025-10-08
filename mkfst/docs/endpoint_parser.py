@@ -15,14 +15,15 @@ from mkfst.models import (
     Body,
     FileUpload,
     Headers,
-    InternalErrorSet,
-    BadRequestErrorSet,
     Parameters,
     Query,
     Model,
 )
 from mkfst.models.http.request_models import HTTPEncodable
-from mkfst.models.validation import ValidationErrorGroup
+from .response_models import (
+    InternalErrorSet,
+    BadRequestErrorSet,
+)
 
 from .models import (
     Header,
@@ -41,6 +42,7 @@ from .parsed_endpoint_metadata import (
 from .parsed_operation_metadata import ParsedOperationMetadata
 from .parsed_tag import ParsedTag
 from .parsed_types import FieldMetadata, SchemaType, FieldType
+from .validation_errors import ValidationErrorGroup
 
 
 Json = dict | list

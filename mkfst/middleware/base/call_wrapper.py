@@ -9,7 +9,7 @@ from typing import (
     Union,
 )
 
-from pydantic import BaseModel
+import msgspec
 
 from .base_wrapper import BaseWrapper
 from .response_context import ResponseContext
@@ -31,7 +31,7 @@ class CallWrapper(BaseWrapper):
                 ]
             ]
         ] = None,
-        responses: Optional[Dict[int, BaseModel]] = None,
+        responses: Optional[Dict[int, msgspec.Struct]] = None,
         serializers: Optional[Dict[int, Callable[..., str]]] = None,
         response_headers: Optional[Dict[str, str]] = None,
     ) -> None:
@@ -61,7 +61,6 @@ class CallWrapper(BaseWrapper):
         self.handler = handler
         self.wraps = isinstance(handler, BaseWrapper)
 
-
         self.run: Optional[MiddlewareHandler] = None
 
         self.middleware_type = middleware_type
@@ -71,10 +70,7 @@ class CallWrapper(BaseWrapper):
         context: ResponseContext | None = None,
         response: Any | None = None,
     ):
-        (
-            context, 
-            response
-        ), _ = await self.run(
+        (context, response), _ = await self.run(
             context=context,
             response=response,
             handler=self.handler,

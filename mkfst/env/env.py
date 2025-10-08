@@ -1,29 +1,20 @@
 import os
+import orjson
+import msgspec
+from ipaddress import IPv4Address, IPv6Address
 from typing import Callable, Dict, Literal, Union
-
-from pydantic import (
-    AnyHttpUrl,
-    BaseModel,
-    IPvAnyAddress,
-    StrictBool,
-    StrictFloat,
-    StrictInt,
-    StrictStr,
-)
 
 PrimaryType = Union[str, int, float, bytes, bool]
 
 
-class Env(BaseModel):
-    MERCURY_SYNC_SERVER_URL: AnyHttpUrl | None = None
-    MERCURY_SYNC_API_VERISON: StrictStr = "0.0.1"
+class Env(msgspec.Struct, kw_only=True):
+    MERCURY_SYNC_SERVER_URL: str | None = None
+    MERCURY_SYNC_API_VERISON: str = "0.0.1"
     MERCURY_SYNC_TASK_EXECUTOR_TYPE: Literal["thread", "process", "none"] = "process"
-    MERCURY_SYNC_HTTP_CIRCUIT_BREAKER_REJECTION_SENSITIVITY: StrictFloat = 2
-    MERCURY_SYNC_HTTP_CIRCUIT_BREAKER_FAILURE_WINDOW: StrictStr = "1m"
-    MERCURY_SYNC_HTTP_CIRCUIT_BREAKER_FAILURE_THRESHOLD: Union[
-        StrictInt, StrictFloat
-    ] = 0.2
-    MERCURY_SYNC_HTTP_HANDLER_TIMEOUT: StrictStr = "1m"
+    MERCURY_SYNC_HTTP_CIRCUIT_BREAKER_REJECTION_SENSITIVITY: float = 2
+    MERCURY_SYNC_HTTP_CIRCUIT_BREAKER_FAILURE_WINDOW: str = "1m"
+    MERCURY_SYNC_HTTP_CIRCUIT_BREAKER_FAILURE_THRESHOLD: Union[int, float] = 0.2
+    MERCURY_SYNC_HTTP_HANDLER_TIMEOUT: str = "1m"
     MERCURY_SYNC_HTTP_RATE_LIMIT_STRATEGY: Literal[
         "none", "global", "endpoint", "ip", "ip-endpoint", "custom"
     ] = "none"
@@ -35,13 +26,13 @@ class Env(BaseModel):
         "sliding-window",
         "token-bucket",
     ] = "sliding-window"
-    MERCURY_SYNC_HTTP_CORS_ENABLED: StrictBool = False
-    MERCURY_SYNC_HTTP_MEMORY_LIMIT: StrictStr = "512mb"
-    MERCURY_SYNC_HTTP_CPU_LIMIT: Union[StrictFloat, StrictInt] = 50
-    MERCURY_SYNC_HTTP_RATE_LIMIT_BACKOFF_RATE: StrictInt = 10
-    MERCURY_SYNC_HTTP_RATE_LIMIT_BACKOFF: StrictStr = "1s"
-    MERCURY_SYNC_HTTP_RATE_LIMIT_PERIOD: StrictStr = "1s"
-    MERCURY_SYNC_HTTP_RATE_LIMIT_REQUESTS: StrictInt = 100
+    MERCURY_SYNC_HTTP_CORS_ENABLED: bool = False
+    MERCURY_SYNC_HTTP_MEMORY_LIMIT: str = "512mb"
+    MERCURY_SYNC_HTTP_CPU_LIMIT: Union[float, int] = 50
+    MERCURY_SYNC_HTTP_RATE_LIMIT_BACKOFF_RATE: int = 10
+    MERCURY_SYNC_HTTP_RATE_LIMIT_BACKOFF: str = "1s"
+    MERCURY_SYNC_HTTP_RATE_LIMIT_PERIOD: str = "1s"
+    MERCURY_SYNC_HTTP_RATE_LIMIT_REQUESTS: int = 100
     MERCURY_SYNC_HTTP_RATE_LIMIT_STRATEGY: Literal[
         "ip",
         "endpoint",
@@ -49,22 +40,22 @@ class Env(BaseModel):
         "ip-endpoint",
         "none",
     ] = "none"
-    MERCURY_SYNC_HTTP_RATE_LIMIT_DEFAULT_REJECT: StrictBool = True
-    MERCURY_SYNC_USE_HTTP_MSYNC_ENCRYPTION: StrictBool = False
-    MERCURY_SYNC_USE_HTTP_SERVER: StrictBool = True
-    MERCURY_SYNC_USE_HTTP_AND_TCP_SERVERS: StrictBool = False
-    MERCURY_SYNC_USE_UDP_MULTICAST: StrictBool = False
-    MERCURY_SYNC_TCP_CONNECT_RETRIES: StrictInt = 3
-    MERCURY_SYNC_CLEANUP_INTERVAL: StrictStr = "0.5s"
-    MERCURY_SYNC_MAX_CONCURRENCY: StrictInt = 2048
-    MERCURY_SYNC_AUTH_SECRET: StrictStr = "testtoken"
-    MERCURY_SYNC_MULTICAST_GROUP: IPvAnyAddress = "224.1.1.1"
-    MERCURY_SYNC_LOGS_DIRECTORY: StrictStr = os.getcwd()
-    MERCURY_SYNC_REQUEST_TIMEOUT: StrictStr = "30s"
-    MERCURY_SYNC_LOG_LEVEL: StrictStr = "info"
-    MERCURY_SYNC_TASK_RUNNER_MAX_THREADS: StrictInt = os.cpu_count()
-    MERCURY_SYNC_MAX_REQUEST_CACHE_SIZE: StrictInt = 100
-    MERCURY_SYNC_ENABLE_REQUEST_CACHING: StrictBool = False
+    MERCURY_SYNC_HTTP_RATE_LIMIT_DEFAULT_REJECT: bool = True
+    MERCURY_SYNC_USE_HTTP_MSYNC_ENCRYPTION: bool = False
+    MERCURY_SYNC_USE_HTTP_SERVER: bool = True
+    MERCURY_SYNC_USE_HTTP_AND_TCP_SERVERS: bool = False
+    MERCURY_SYNC_USE_UDP_MULTICAST: bool = False
+    MERCURY_SYNC_TCP_CONNECT_RETRIES: int = 3
+    MERCURY_SYNC_CLEANUP_INTERVAL: str = "0.5s"
+    MERCURY_SYNC_MAX_CONCURRENCY: int = 2048
+    MERCURY_SYNC_AUTH_SECRET: str = "testtoken"
+    MERCURY_SYNC_MULTICAST_GROUP: IPv4Address | IPv6Address = "224.1.1.1"
+    MERCURY_SYNC_LOGS_DIRECTORY: str = os.getcwd()
+    MERCURY_SYNC_REQUEST_TIMEOUT: str = "30s"
+    MERCURY_SYNC_LOG_LEVEL: str = "info"
+    MERCURY_SYNC_TASK_RUNNER_MAX_THREADS: int = os.cpu_count()
+    MERCURY_SYNC_MAX_REQUEST_CACHE_SIZE: int = 100
+    MERCURY_SYNC_ENABLE_REQUEST_CACHING: bool = False
     MERCURY_SYNC_VERIFY_SSL_CERT: Literal["REQUIRED", "OPTIONAL", "NONE"] = "REQUIRED"
 
     @classmethod
@@ -111,3 +102,25 @@ class Env(BaseModel):
             "MERCURY_SYNC_MAX_REQUEST_CACHE_SIZE": int,
             "MERCURY_SYNC_ENABLE_REQUEST_CACHING": str,
         }
+
+    def model_dump(self, exclude_none: bool = False):
+        if exclude_none:
+            return {
+                key: value
+                for key, value in msgspec.structs.asdict(self)
+                if value is not None
+            }
+
+        return msgspec.structs.asdict(self)
+
+    def model_dump_json(self, exclude_none: bool = False):
+        if exclude_none:
+            return orjson.dumps(
+                {
+                    key: value
+                    for key, value in msgspec.structs.asdict(self)
+                    if value is not None
+                }
+            )
+
+        return orjson.dumps(msgspec.structs.asdict(self))

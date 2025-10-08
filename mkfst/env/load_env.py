@@ -1,19 +1,18 @@
 import os
-from pydantic import BaseModel
+import msgspec
 from typing import Dict, Type, TypeVar, Union
 
 from dotenv import dotenv_values
 
 from .env import Env
 
-T = TypeVar("T", bound=BaseModel)
+T = TypeVar("T", bound=msgspec.Struct)
 
 PrimaryType = Union[str, int, bool, float, bytes]
 
 
-def load_env(env: Type[T], env_file: str = None, existing: Env | None = None) -> T:
-    env_type: Env = env
-    envars = env_type.types_map()
+def load_env(default: type[Env], env_file: str = None, override: T | None = None) -> T:
+    envars = default.types_map()
 
     if env_file is None:
         env_file = ".env"
@@ -34,7 +33,13 @@ def load_env(env: Type[T], env_file: str = None, existing: Env | None = None) ->
 
         values.update(env_file_values)
 
-    if existing:
-        values.update(**existing.model_dump())
+    if override:
+        values.update(**msgspec.structs.asdict(override))
 
-    return env(**{name: value for name, value in values.items() if value is not None})
+        return type(override)(
+            **{name: value for name, value in values.items() if value is not None}
+        )
+
+    return default(
+        **{name: value for name, value in values.items() if value is not None}
+    )

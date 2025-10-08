@@ -9,7 +9,7 @@ from typing import (
     Union,
 )
 
-from pydantic import BaseModel
+import msgspec
 
 from .base_wrapper import BaseWrapper
 from .response_context import ResponseContext
@@ -36,7 +36,7 @@ class BidirectionalWrapper(BaseWrapper):
                 ]
             ]
         ] = None,
-        responses: Optional[Dict[int, BaseModel]] = None,
+        responses: Optional[Dict[int, msgspec.Struct]] = None,
         serializers: Optional[Dict[int, Callable[..., str]]] = None,
         response_headers: Optional[Dict[str, str]] = None,
     ) -> None:
@@ -75,17 +75,14 @@ class BidirectionalWrapper(BaseWrapper):
         self.middleware_type = middleware_type
 
     async def __call__(
-        self,  
+        self,
         context: ResponseContext | None = None,
         response: Any | None = None,
     ):
         if context is None:
-            raise Exception('Err. - Context is missing.')
+            raise Exception("Err. - Context is missing.")
 
-        (
-            context, 
-            response
-        ), run_next = await self.pre(
+        (context, response), run_next = await self.pre(
             context=context,
             response=response,
             handler=self.handler,
@@ -97,10 +94,7 @@ class BidirectionalWrapper(BaseWrapper):
         if self.wraps:
             # Is wraps additional middleware so expect
             # a middleware response
-            ( 
-                context, 
-                response
-            ) = await self.handler(
+            (context, response) = await self.handler(
                 context=context,
                 response=response,
             )
@@ -113,15 +107,18 @@ class BidirectionalWrapper(BaseWrapper):
             )
 
         (
-            context, 
-            response,
-        ), _ = await self.post(
+            (
+                context,
+                response,
+            ),
+            _,
+        ) = await self.post(
             context=context,
             response=response,
             handler=self.handler,
         )
 
         return (
-            context, 
+            context,
             response,
         )
