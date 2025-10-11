@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import orjson
 import msgspec
@@ -46,7 +47,7 @@ class Env(msgspec.Struct, kw_only=True):
     MERCURY_SYNC_USE_HTTP_AND_TCP_SERVERS: bool = False
     MERCURY_SYNC_USE_UDP_MULTICAST: bool = False
     MERCURY_SYNC_TCP_CONNECT_RETRIES: int = 3
-    MERCURY_SYNC_CLEANUP_INTERVAL: str = "0.5s"
+    MERCURY_SYNC_CLEANUP_INTERVAL: str = "0.25s"
     MERCURY_SYNC_MAX_CONCURRENCY: int = 2048
     MERCURY_SYNC_AUTH_SECRET: str = "testtoken"
     MERCURY_SYNC_MULTICAST_GROUP: IPv4Address | IPv6Address = "224.1.1.1"

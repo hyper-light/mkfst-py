@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import datetime
 
@@ -10,25 +11,31 @@ from mkfst import (
 )
 
 
-class MetadataV2(Model):
+class MetadataV2(Model, tag=True):
     accessed: datetime.datetime
 
 
-class MetadataV1(Model):
+class MetadataV1(Model, tag=True):
     created: datetime.datetime
     updated: datetime.datetime
 
 
-class User(Model):
+class UserV1(Model):
     username: str
     password: str
-    metadata: MetadataV1 | MetadataV2
+    metadata: MetadataV1
+
+
+class UserV2(Model):
+    username: str
+    password: str
+    metadata: MetadataV2
 
 
 class UsersApiV1(Group):
     @endpoint("/get")
-    async def get_service(self) -> User:
-        return User(
+    async def get_service(self) -> UserV1:
+        return UserV1(
             username="johnnyj",
             password="Password12345",
             metadata=MetadataV1(
@@ -40,8 +47,8 @@ class UsersApiV1(Group):
 
 class UsersApiV2(Group):
     @endpoint("/get")
-    async def get_service(self) -> User:
-        return User(
+    async def get_service(self) -> UserV2:
+        return UserV2(
             username="johnnyj",
             password="Password12345",
             metadata=MetadataV2(accessed=datetime.datetime.now()),
@@ -73,18 +80,25 @@ class TestService(Service):
         """
         )
 
+    @endpoint("/")
+    async def get_base(self) -> str:
+        return "Hello World"
+
 
 async def run_server():
     server = TestService(
         "localhost",
         5019,
+        log_level="error",
         groups=[
             ApiV1("/api/v1", groups=[UsersApiV1("/users")]),
             ApiV2("/api/v2", groups=[UsersApiV2("/users")]),
         ],
+        workers=0,
     )
 
     await server.run()
 
 
-asyncio.run(run_server())
+if __name__ == "__main__":
+    asyncio.run(run_server())

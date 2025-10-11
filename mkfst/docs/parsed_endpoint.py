@@ -9,6 +9,7 @@ from mkfst.models import (
     Headers,
     Parameters,
     Query,
+    Model,
 )
 
 from .parsed_endpoint_metadata import (
@@ -26,7 +27,7 @@ class ParsedEndpoint(BaseModel):
         type[HTML]
         | type[FileUpload]
         | type[Body]
-        | type[BaseModel]
+        | type[Model]
         | type[dict]
         | type[list]
         | type[str]
@@ -43,7 +44,7 @@ class ParsedEndpoint(BaseModel):
         type[HTML]
         | type[FileUpload]
         | type[Body]
-        | type[BaseModel]
+        | type[Model]
         | type[dict]
         | type[list]
         | type[str]

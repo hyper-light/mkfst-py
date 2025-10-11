@@ -4,7 +4,7 @@ from mkfst import (
     Service,
     endpoint,
     Parameters,
-    Body,
+    Env,
 )
 
 
@@ -36,6 +36,8 @@ if __name__ == "__main__":
             "localhost",
             6099,
             log_level="error",
+            workers=18,
+            env=Env(MERCURY_SYNC_CLEANUP_INTERVAL="0.25s"),
         )
 
         await server.run()

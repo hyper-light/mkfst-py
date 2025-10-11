@@ -37,7 +37,7 @@ class HTTPResponse(msgspec.Struct, kw_only=True):
         encoded_data: str = ""
 
         if isinstance(self.data, Model) or self.data in Model.__subclasses__():
-            encoded_data = orjson.dumps(self.data.model_dump()).decode()
+            encoded_data = orjson.dumps(msgspec.structs.asdict(self.data)).decode()
             content_length = len(encoded_data)
             headers = f"content-length: {content_length}"
 

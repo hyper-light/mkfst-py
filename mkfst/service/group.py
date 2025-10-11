@@ -96,7 +96,7 @@ class Group:
         task_runner = TaskRunner(instance_id, env)
 
         parsers: Dict[str, Any] = {}
-        events: Dict[str, Coroutine] = {}
+        events: Dict[str, Dict[str, Callable[..., Awaitable[Any]]]] = {}
         match_routes: Dict[str, Dict[str, Callable[..., Awaitable[Any]]]] = {}
 
         request_parsers: Dict[str, Model | dict | list | str] = {}
@@ -118,24 +118,28 @@ class Group:
             task_runner.add(task)
 
         for path, endpoint in endpoints.items():
-            handler = endpoint
             has_middleware = len(self._middleware) > 0
             if has_middleware:
                 middleware_enabled[path] = True
 
             if isinstance(endpoint, (Middleware, BaseWrapper)):
-                handler = self._handlers[path]
+                endpoint = self._handlers[path]
 
-            endpoint_signature = inspect.signature(handler)
+            endpoint_signature = inspect.signature(endpoint)
             params = endpoint_signature.parameters.values()
 
-            return_type = get_type_hints(handler).get("return")
+            return_type = get_type_hints(endpoint).get("return")
             response_types = get_args(return_type)
+
+            methods = endpoint.methods
 
             request_parsers.update(
                 {
-                    path: get_args(param_type.annotation)[0]
+                    join_paths(self._base, endpoint.path): {
+                        method: get_args(param_type.annotation)[0]
+                    }
                     for param_type in params
+                    for method in methods
                     if (
                         (args := get_args(param_type.annotation))
                         and len(args) > 0
@@ -144,8 +148,9 @@ class Group:
                 }
             )
 
-            routes[handler.path] = {method: endpoint for method in handler.methods}
-            methods = handler.methods
+            routes[join_paths(self._base, endpoint.path)] = {
+                method: endpoint for method in endpoint.methods
+            }
 
             if (
                 len(response_types) > 1
@@ -155,53 +160,91 @@ class Group:
                 model = response_types[0]
                 status_code = response_types[1]
 
-                response_parsers[path] = (model, status_code)
+                response_parsers.update(
+                    {
+                        join_paths(self._base, endpoint.path): {
+                            method: (
+                                model,
+                                status_code,
+                            )
+                            for method in methods
+                        }
+                    }
+                )
 
             elif (
                 len(response_types) > 0 and response_types[0] in Model.__subclasses__()
             ):
                 model = response_types[0]
 
-                response_parsers[path] = (model, 200)
-
-            elif return_type in get_args(Json) or get_origin(return_type) in get_args(
-                Json
-            ):
                 response_parsers.update(
                     {
-                        f"{method}_{handler.path}": (
-                            parse_to_source_type(
-                                return_type,
-                            ),
-                            200,
-                        )
-                        for method in methods
+                        join_paths(self._base, endpoint.path): {
+                            method: (
+                                model,
+                                200,
+                            )
+                            for method in methods
+                        }
                     }
                 )
 
             elif return_type in Model.__subclasses__():
                 response_parsers.update(
                     {
-                        f"{method}_{handler.path}": (return_type, 200)
-                        for method in methods
+                        join_paths(self._base, endpoint.path): {
+                            method: (
+                                return_type,
+                                200,
+                            )
+                            for method in methods
+                        }
                     }
                 )
 
-            if isinstance(handler.responses, dict):
-                responses = handler.responses
+            elif return_type in get_args(Json) or get_origin(return_type) in get_args(
+                Json
+            ):
+                response_parsers.update(
+                    {
+                        join_paths(self._base, endpoint.path): {
+                            method: (
+                                parse_to_source_type(
+                                    return_type,
+                                ),
+                                200,
+                            )
+                            for method in methods
+                        }
+                    }
+                )
+
+            if isinstance(endpoint.responses, dict):
+                responses = endpoint.responses
 
                 response_parsers.update(
                     {
-                        path: (response_model, status)
-                        for status, response_model in responses.items()
-                        if (issubclass(response_model, Model))
+                        join_paths(self._base, endpoint.path): {
+                            method: (response_model, status)
+                            for method in methods
+                            for status, response_model in responses.items()
+                            if (issubclass(response_model, Model))
+                        }
                     }
                 )
 
         parsers.update(request_parsers)
         parsers.update(response_parsers)
 
-        events.update(endpoints)
+        events.update(
+            {
+                join_paths(
+                    self._base,
+                    path,
+                ): endpoint
+                for path, endpoint in endpoints.items()
+            }
+        )
         match_routes.update(routes)
 
         for group in self._groups:
@@ -268,21 +311,14 @@ class Group:
 
             if not_internal and not_reserved and is_endpoint:
                 methods: List[str] = call.methods
-                path: str = call.path
 
                 handler = call
                 for middleware_operator in self._middleware:
                     call = middleware_operator.wrap(call)
 
-                endpoint_path = join_paths(self._base, path)
+                endpoints.update({handler.path: call})
 
-                endpoints.update(
-                    {f"{method}_{endpoint_path}": call for method in methods}
-                )
-
-                self._handlers.update(
-                    {f"{method}_{endpoint_path}": handler for method in methods}
-                )
+                self._handlers.update({handler.path: handler})
 
                 call_params = inspect.signature(handler).parameters
 
@@ -364,13 +400,14 @@ class Group:
                 call_response_headers = dict(handler.response_headers)
                 response_headers.update(
                     {
-                        f"{method}_{endpoint_path}": dict(handler.response_headers)
-                        for method in methods
+                        handler.path: {
+                            method: dict(handler.response_headers) for method in methods
+                        }
                     }
                 )
 
-                endpoint_docs[endpoint_path] = ParsedEndpoint(
-                    path=endpoint_path,
+                endpoint_docs[handler.path] = ParsedEndpoint(
+                    path=handler.path,
                     methods=methods,
                     endpoint_metadata=ParsedEndpointMetadata(
                         description=handler.__doc__,
@@ -392,7 +429,10 @@ class Group:
                             for method in methods
                         },
                     ),
-                    responses=responses,
+                    responses={
+                        status: parse_to_source_type(response_type)
+                        for status, response_type in responses.items()
+                    },
                     response_headers=call_response_headers,
                     headers=fabricator["headers"],
                     parameters=fabricator["parameters"],
@@ -401,11 +441,11 @@ class Group:
                     required=fabricator.required_params,
                 )
 
-                for method in methods:
-                    endpoint_method_key = f"{method}_{endpoint_path}"
-                    fabricators[endpoint_method_key] = fabricator
+                fabricators[join_paths(self._base, handler.path)] = {
+                    method: fabricator for method in methods
+                }
 
-                self._supported_handlers[endpoint_path] = {
+                self._supported_handlers[join_paths(self._base, handler.path)] = {
                     method: handler for method in methods
                 }
 

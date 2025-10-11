@@ -407,9 +407,15 @@ class Service(Generic[E]):
                     "response_headers",
                 ],
                 Dict[str, Any],
-            ] = group._assemble(self._instance_id, self.env, self.middleware)
+            ] = group._assemble(
+                self._instance_id,
+                self.env,
+                self.middleware,
+            )
 
-            self._apply_group(assembled)
+            self._apply_group(
+                assembled,
+            )
 
     def _apply_group(
         self,
@@ -431,20 +437,73 @@ class Service(Generic[E]):
             Dict[str, Any],
         ],
     ):
+        events = assembled["events"]
+        fabricators = assembled["fabricators"]
+        request_parsers = assembled["request_parsers"]
+        response_parsers = assembled["response_parsers"]
+        supported_handlers = assembled["supported_handlers"]
+        middleware_enabled = assembled["middleware_enabled"]
+        response_headers = assembled["response_headers"]
+        endpoint_docs = assembled["endpoint_docs"]
+
+        self._tcp.fabricators.update(
+            {
+                f"{method}_{route}": fabricator
+                for route, methods in fabricators.items()
+                for method, fabricator in methods.items()
+            }
+        )
+
+        self._tcp._request_parsers.update(
+            {
+                f"{method}_{route}": parser
+                for route, methods in request_parsers.items()
+                for method, parser in methods.items()
+            }
+        )
+
+        self._tcp._response_parsers.update(
+            {
+                f"{method}_{route}": parser
+                for route, methods in response_parsers.items()
+                for method, parser in methods.items()
+            }
+        )
+
+        self._tcp._supported_handlers.update(
+            {
+                f"{method}_{route}": supported_handler
+                for route, methods in supported_handlers.items()
+                for method, supported_handler in methods.items()
+            }
+        )
+
+        self._tcp._middleware_enabled.update(
+            {
+                f"{method}_{route}": middleware_enabled_status
+                for route, methods in middleware_enabled.items()
+                for method, middleware_enabled_status in methods.items()
+            }
+        )
+
+        self._tcp._response_headers.update(
+            {
+                f"{method}_{route}": response_header_set
+                for route, methods in response_headers.items()
+                for method, response_header_set in methods.items()
+            }
+        )
+
+        self._endpoint_docs.update(
+            {route: endpoint_doc for route, endpoint_doc in endpoint_docs.items()}
+        )
+
         for route, methods in assembled["routes"].items():
+            self._tcp.events.update(
+                {f"{method}_{route}": events[route] for method in methods}
+            )
+
             self._tcp.routes.add(route, methods)
-
-        for key, parser in assembled["response_parsers"].items():
-            self._tcp._response_parsers[key] = parser
-
-        self._tcp.events.update(assembled["events"])
-        self._tcp.parsers.update(assembled["parsers"])
-        self._tcp.match_routes.update(assembled["match_routes"])
-        self._tcp._supported_handlers.update(assembled["supported_handlers"])
-        self._tcp._middleware_enabled.update(assembled["middleware_enabled"])
-        self._tcp.fabricators.update(assembled["fabricators"])
-        self._tcp._response_headers.update(assembled["response_headers"])
-        self._endpoint_docs.update(assembled["endpoint_docs"])
 
         self._group_middleware.extend(
             [
@@ -558,9 +617,6 @@ class Service(Generic[E]):
                     }
                 )
 
-        self._tcp.parsers.update(request_parsers)
-        self._tcp.parsers.update(response_parsers)
-
         self._tcp.events.update(endpoints)
         self._tcp.match_routes.update(routes)
         self._tcp.fabricators.update(fabricators)
@@ -568,6 +624,9 @@ class Service(Generic[E]):
 
         for route, methods in routes.items():
             self._tcp.routes.add(route, methods)
+
+        for key, parser in request_parsers.items():
+            self._tcp._request_parsers[key] = parser
 
         for key, parser in response_parsers.items():
             self._tcp._response_parsers[key] = parser
@@ -848,7 +907,9 @@ class Service(Generic[E]):
                     KeyboardInterrupt,
                     Exception,
                 ):
-                    pass
+                    import traceback
+
+                    print(traceback.format_exc())
 
                 await self.close()
 

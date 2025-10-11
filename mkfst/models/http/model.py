@@ -44,27 +44,39 @@ class Model(msgspec.Struct):
     def model_fields(cls):
         return {field.name: field for field in msgspec.structs.fields(cls)}
 
+    @classmethod
+    def model_spec(cls):
+        return {field.name: field.type for field in msgspec.structs.fields(cls)}
+
     def model_dump(self, exclude_none: bool = False):
         if exclude_none:
             return {
-                key: value
-                for key, value in msgspec.structs.asdict(self)
+                key: value.model_dump() if isinstance(value, Model) else value
+                for key, value in msgspec.structs.asdict(self).items()
                 if value is not None
             }
 
-        return msgspec.structs.asdict(self)
+        return {
+            key: value.model_dump() if isinstance(value, Model) else value
+            for key, value in msgspec.structs.asdict(self).items()
+        }
 
     def model_dump_json(self, exclude_none: bool = False):
         if exclude_none:
             return orjson.dumps(
                 {
-                    key: value
-                    for key, value in msgspec.structs.asdict(self)
+                    key: value.model_dump() if isinstance(value, Model) else value
+                    for key, value in msgspec.structs.asdict(self).items()
                     if value is not None
                 }
             )
 
-        return orjson.dumps(msgspec.structs.asdict(self))
+        return orjson.dumps(
+            {
+                key: value.model_dump() if isinstance(value, Model) else value
+                for key, value in msgspec.structs.asdict(self).items()
+            }
+        )
 
     def model_copy(self, update: T):
         model_dict = msgspec.structs.asdict(self)

@@ -101,6 +101,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
         self._use_encryption = env.MERCURY_SYNC_USE_HTTP_MSYNC_ENCRYPTION
 
         self._supported_handlers: Dict[str, Dict[str, str]] = defaultdict(dict)
+        self._request_parsers: Dict[Model, Tuple[Callable[[Any], str], int]] = {}
         self._response_parsers: Dict[Model, Tuple[Callable[[Any], str], int]] = {}
         self._response_headers: Dict[str, Dict[str, Any]] = {}
 
@@ -861,6 +862,9 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 transport.write(response_data)
 
             except Exception as e:
+                import traceback
+
+                print(traceback.format_exc())
                 async with self._backoff_sem:
                     await ctx.log(
                         Response(

@@ -1,5 +1,5 @@
 from typing import Any, Dict, Type
-
+import msgspec
 import orjson
 
 from .file_upload import FileUpload

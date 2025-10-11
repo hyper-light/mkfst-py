@@ -37,7 +37,6 @@ class MercurySyncTCPConnection:
         self.events: Dict[str, Coroutine] = {}
 
         self.queue: Dict[str, Deque[Tuple[str, int, float, Any]]] = defaultdict(deque)
-        self.parsers: Dict[str, Callable[..., msgspec.Struct | str]] = {}
         self.connected = False
         self._running = False
 
