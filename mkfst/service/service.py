@@ -907,9 +907,7 @@ class Service(Generic[E]):
                     KeyboardInterrupt,
                     Exception,
                 ):
-                    import traceback
-
-                    print(traceback.format_exc())
+                    pass
 
                 await self.close()
 

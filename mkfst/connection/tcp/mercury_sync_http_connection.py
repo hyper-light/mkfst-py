@@ -862,9 +862,6 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                 transport.write(response_data)
 
             except Exception as e:
-                import traceback
-
-                print(traceback.format_exc())
                 async with self._backoff_sem:
                     await ctx.log(
                         Response(
