@@ -70,6 +70,7 @@ class MercurySyncTCPServerProtocol(asyncio.Protocol, Generic[T]):
             )
         else:
             self._next_data.set_result(self._receive_buffer)
+            self._next_data = asyncio.Future()
 
     def connection_lost(self, exc: Exception | None):
         self.connections.discard(self)
