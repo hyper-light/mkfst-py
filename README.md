@@ -7,7 +7,7 @@
 
 | Package     | Mkfst-Py                                                        |
 | ----------- | -----------                                                     |
-| Version     | 0.4.3                                                           |
+| Version     | 0.5.11                                                          |
 | Download    | https://pypi.org/project/mkfst-py/                              | 
 | Source      | https://github.com/hyper-light/mkfst-py                         |
 | Keywords    | http, rest, framework, web, api                                 |
