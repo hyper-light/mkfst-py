@@ -1,5 +1,5 @@
 import binascii
-import orjson
+import hyperjson
 from pydantic import JsonValue
 
 try:
@@ -146,7 +146,7 @@ def _encode_header(algorithm, additional_headers=None):
     if additional_headers:
         header.update(additional_headers)
 
-    json_header: bytes = orjson.dumps(header)
+    json_header: bytes = hyperjson.dumps(header)
 
     return base64url_encode(json_header)
 
@@ -154,7 +154,7 @@ def _encode_header(algorithm, additional_headers=None):
 def _encode_payload(payload: dict[str, JsonValue]):
     if isinstance(payload, Mapping):
         try:
-            payload: bytes = orjson.dumps(payload)
+            payload: bytes = hyperjson.dumps(payload)
         except ValueError:
             pass
 
@@ -195,7 +195,7 @@ def _load(jwt: str | bytes):
         raise JWSError("Invalid header padding")
 
     try:
-        header: dict[bytes, bytes] = orjson.loads(header_data)
+        header: dict[bytes, bytes] = hyperjson.loads(header_data)
     except ValueError as e:
         raise JWSError("Invalid header string: %s" % e)
 
@@ -237,7 +237,7 @@ def _get_keys(key: str | Key):
         return (key,)
 
     try:
-        key = orjson.loads(key, parse_int=str, parse_float=str)
+        key = hyperjson.loads(key, parse_int=str, parse_float=str)
     except Exception:
         pass
 

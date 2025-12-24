@@ -4,7 +4,7 @@ from base64 import b64encode
 from gzip import compress as gzip_compress
 from typing import Dict, Literal, Optional
 
-import orjson
+import hyperjson
 from zstandard import compress as zstd_compress
 
 from .model import Model
@@ -37,12 +37,12 @@ class HTTPResponse(msgspec.Struct, kw_only=True):
         encoded_data: str = ""
 
         if isinstance(self.data, Model) or self.data in Model.__subclasses__():
-            encoded_data = orjson.dumps(msgspec.structs.asdict(self.data)).decode()
+            encoded_data = hyperjson.dumps(msgspec.structs.asdict(self.data)).decode()
             content_length = len(encoded_data)
             headers = f"content-length: {content_length}"
 
         elif isinstance(self.data, (dict, list)):
-            encoded_data = orjson.dumps(self.data).decode()
+            encoded_data = hyperjson.dumps(self.data).decode()
             content_length = len(encoded_data)
             headers = f"content-length: {content_length}"
 

@@ -19,7 +19,7 @@ from typing import (
     Iterable,
 )
 
-import orjson
+import hyperjson
 import psutil
 
 from mkfst.connection.base.connection_type import ConnectionType
@@ -697,7 +697,7 @@ class MercurySyncHTTPConnection(MercurySyncTCPConnection):
                     if len(context.errors) > 0 and transport.is_closing() is False:
                         error_headers = {"content-type": "application/json"}
 
-                        errors = orjson.dumps(
+                        errors = hyperjson.dumps(
                             [
                                 {
                                     "error": str(error),

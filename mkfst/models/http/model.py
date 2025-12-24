@@ -1,6 +1,6 @@
 from __future__ import annotations
 import msgspec
-import orjson
+import hyperjson
 from typing import TypeVar
 
 
@@ -63,7 +63,7 @@ class Model(msgspec.Struct):
 
     def model_dump_json(self, exclude_none: bool = False):
         if exclude_none:
-            return orjson.dumps(
+            return hyperjson.dumps(
                 {
                     key: value.model_dump() if isinstance(value, Model) else value
                     for key, value in msgspec.structs.asdict(self).items()
@@ -71,7 +71,7 @@ class Model(msgspec.Struct):
                 }
             )
 
-        return orjson.dumps(
+        return hyperjson.dumps(
             {
                 key: value.model_dump() if isinstance(value, Model) else value
                 for key, value in msgspec.structs.asdict(self).items()

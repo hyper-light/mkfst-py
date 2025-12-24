@@ -20,22 +20,16 @@ class MetadataV1(Model, tag=True):
     updated: datetime.datetime
 
 
-class UserV1(Model):
+class User(Model):
     username: str
     password: str
-    metadata: MetadataV1
-
-
-class UserV2(Model):
-    username: str
-    password: str
-    metadata: MetadataV2
+    metadata: MetadataV1 | MetadataV2
 
 
 class UsersApiV1(Group):
     @endpoint("/get")
-    async def get_service(self) -> UserV1:
-        return UserV1(
+    async def get_service(self) -> User:
+        return User(
             username="johnnyj",
             password="Password12345",
             metadata=MetadataV1(
@@ -47,8 +41,8 @@ class UsersApiV1(Group):
 
 class UsersApiV2(Group):
     @endpoint("/get")
-    async def get_service(self) -> UserV2:
-        return UserV2(
+    async def get_service(self) -> User:
+        return User(
             username="johnnyj",
             password="Password12345",
             metadata=MetadataV2(accessed=datetime.datetime.now()),

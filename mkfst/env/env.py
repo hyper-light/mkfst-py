@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os
-import orjson
+import hyperjson
 import msgspec
 from ipaddress import IPv4Address, IPv6Address
 from typing import Callable, Dict, Literal, Union
@@ -116,7 +116,7 @@ class Env(msgspec.Struct, kw_only=True):
 
     def model_dump_json(self, exclude_none: bool = False):
         if exclude_none:
-            return orjson.dumps(
+            return hyperjson.dumps(
                 {
                     key: value
                     for key, value in msgspec.structs.asdict(self)
@@ -124,4 +124,4 @@ class Env(msgspec.Struct, kw_only=True):
                 }
             )
 
-        return orjson.dumps(msgspec.structs.asdict(self))
+        return hyperjson.dumps(msgspec.structs.asdict(self))

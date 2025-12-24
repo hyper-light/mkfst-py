@@ -1,6 +1,6 @@
 from typing import Annotated, Any, Dict, Optional
 import textwrap
-import orjson
+import hyperjson
 from typing_extensions import Doc
 
 from mkfst.models.http import HTML
@@ -133,7 +133,7 @@ def get_swagger_ui_html(
     """
 
     for key, value in current_swagger_ui_parameters.items():
-        html += f"{orjson.dumps(key).decode()}: {orjson.dumps(value).decode()},\n"
+        html += f"{hyperjson.dumps(key).decode()}: {hyperjson.dumps(value).decode()},\n"
 
     if oauth2_redirect_url:
         html += f"oauth2RedirectUrl: window.location.origin + '{oauth2_redirect_url}',"
@@ -147,7 +147,7 @@ def get_swagger_ui_html(
 
     if init_oauth:
         html += f"""
-        ui.initOAuth({orjson.dumps(init_oauth).decode()})
+        ui.initOAuth({hyperjson.dumps(init_oauth).decode()})
         """
 
     html += """

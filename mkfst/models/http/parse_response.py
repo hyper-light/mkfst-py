@@ -1,6 +1,6 @@
 from typing import Any, Dict, Type
 import msgspec
-import orjson
+import hyperjson
 
 from .file_upload import FileUpload
 from .html import HTML
@@ -28,9 +28,9 @@ def parse_response(
         return response.content.decode()
 
     elif response_model == dict or response_model == list:
-        return orjson.dumps(response).decode()
+        return hyperjson.dumps(response).decode()
 
     elif response_model in Model.__subclasses__():
-        return orjson.dumps(response.model_dump()).decode()
+        return hyperjson.dumps(response.model_dump()).decode()
 
     return response

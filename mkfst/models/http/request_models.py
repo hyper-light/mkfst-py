@@ -9,7 +9,7 @@ from typing import (
     TypeVar,
 )
 
-import orjson
+import hyperjson
 from pydantic import (
     StrictBool,
     StrictFloat,
@@ -104,7 +104,7 @@ class Body(Model):
         return self.content.decode(encoding=encoding)
 
     def json(self):
-        return orjson.loads(self.content)
+        return hyperjson.loads(self.content)
 
     @classmethod
     def make(

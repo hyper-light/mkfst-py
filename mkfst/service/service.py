@@ -4,6 +4,7 @@ import asyncio
 import functools
 import inspect
 import multiprocessing
+import json
 
 import os
 import random
@@ -11,7 +12,7 @@ import signal
 import socket
 import sys
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, InterpreterPoolExecutor
 from inspect import signature
 from typing import (
     Any,
@@ -79,12 +80,22 @@ Tag = Dict[Literal["value", "description", "docs_description", "docs_url"], str]
 
 
 async def run(
+    cfg: tuple[str, int, int, int | None],
     service_name: str,
-    tcp_connection: MercurySyncHTTPConnection,
     env: msgspec.Struct,
     groups: List[Group],
     config: Dict[str, Union[int, socket.socket, str]] = {},
 ):
+    host, port, instance_id, upgrade_port = cfg
+
+    tcp_connection = MercurySyncHTTPConnection(
+        host,
+        port,
+        instance_id,
+        upgrade_port=upgrade_port,
+        env=env,
+    )
+
     try:
         tcp_connection.from_env(env)
 
@@ -138,13 +149,16 @@ async def run(
 
 
 def start_pool(
-    tcp_connection: MercurySyncHTTPConnection,
+    cfg: tuple[str, int, int, int | None],
     service_name: str,
-    custom_env: msgspec.Struct,
+    custom_env: bytes,
     groups: List[Group],
     config: Dict[str, Union[int, socket.socket, str]] = {},
 ):
     import asyncio
+    import json
+
+    custom_env = Env(**json.loads(custom_env))
 
     try:
         import uvloop
@@ -170,8 +184,8 @@ def start_pool(
         loop = asyncio.get_event_loop()
         loop.run_until_complete(
             run(
+                cfg,
                 service_name,
-                tcp_connection,
                 custom_env,
                 groups,
                 config,
@@ -273,7 +287,7 @@ class Service(Generic[E]):
         self.groups = groups
 
         self._is_worker = False
-        self._engine: Union[ProcessPoolExecutor, None] = None
+        self._engine: Union[InterpreterPoolExecutor, None] = None
         self._tcp_queue: Dict[Tuple[str, int], asyncio.Queue] = defaultdict(
             asyncio.Queue
         )
@@ -851,9 +865,9 @@ class Service(Generic[E]):
                     Event(message=f"Initializing - {self._workers} - workers")
                 )
 
-                engine = ProcessPoolExecutor(
+                engine = InterpreterPoolExecutor(
                     max_workers=self._workers,
-                    mp_context=spawn,
+                    # mp_context=spawn,
                 )
 
                 tcp_socket = bind_tcp_socket(self.host, self.port)
@@ -873,25 +887,24 @@ class Service(Generic[E]):
                 }
 
                 for _ in range(self._workers):
-                    connection = MercurySyncHTTPConnection(
-                        self.host,
-                        self.port,
-                        self._instance_id,
-                        upgrade_port=self.upgrade_port,
-                        env=self.env,
-                    )
-
                     service_name = self.__class__.__name__
 
                     service_worker = loop.run_in_executor(
                         engine,
                         functools.partial(
                             start_pool,
-                            connection,
+                            (
+                                self.host,
+                                self.port,
+                                self._instance_id,
+                                self.upgrade_port,
+                            ),
                             service_name,
-                            self.env,
-                            self.groups,
-                            config=config,
+                            json.dumps(msgspec.structs.asdict(self.env)),
+                            # self.groups,
+                            # config=config,
+                            None,
+                            None,
                         ),
                     )
 
@@ -907,7 +920,9 @@ class Service(Generic[E]):
                     KeyboardInterrupt,
                     Exception,
                 ):
-                    pass
+                    import traceback
+
+                    print(traceback.format_exc())
 
                 await self.close()
 
