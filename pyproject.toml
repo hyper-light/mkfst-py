@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mkfst"
-version = "0.5.11"
+version = "0.6.0"
 requires-python = ">=3.11"
 description = "MKFST (Make Fast) is a high-performance, async, non-ASGI, Python HTTP webserver framework"
 readme = "README.md"
@@ -49,11 +49,24 @@ auth = [
 	"pyasn1",
 ]
 
+dev = [
+	"pytest>=8.0",
+	"pytest-asyncio>=0.23",
+	"httpx>=0.27",
+	"trustme>=1.1",
+	"ruff>=0.6",
+]
+
 [project.urls]
 Homepage = "https://github.com/hyper-light/mkfst-py"
 
 [tool.setuptools.packages]
 find = {}  # Scanning implicit namespaces is active by default
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 target-version = "py311"

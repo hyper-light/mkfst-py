@@ -84,7 +84,18 @@ class Group:
         instance_id: int,
         env: Env,
         parent_middleware: List[Middleware],
+        parent_prefix: str = "",
     ):
+        # Resolve the effective base path *once* per assemble call, derived
+        # purely from arguments. The previous implementation mutated each
+        # child group's ``_base`` in place via
+        # ``group._base = join_paths(self._base, group._base)`` — re-running
+        # setup or reusing the same Group instance under another parent then
+        # double-prefixed.
+        effective_base = (
+            join_paths(parent_prefix, self._base) if parent_prefix else self._base
+        )
+
         self._middleware.extend(
             [
                 middleware
@@ -112,7 +123,7 @@ class Group:
             fabricators,
             endpoint_docs,
             response_headers,
-        ) = self._gather_hooks()
+        ) = self._gather_hooks(effective_base=effective_base)
 
         for task in tasks.values():
             task_runner.add(task)
@@ -135,7 +146,7 @@ class Group:
 
             request_parsers.update(
                 {
-                    join_paths(self._base, endpoint.path): {
+                    join_paths(effective_base, endpoint.path): {
                         method: get_args(param_type.annotation)[0]
                     }
                     for param_type in params
@@ -148,7 +159,7 @@ class Group:
                 }
             )
 
-            routes[join_paths(self._base, endpoint.path)] = {
+            routes[join_paths(effective_base, endpoint.path)] = {
                 method: endpoint for method in endpoint.methods
             }
 
@@ -162,7 +173,7 @@ class Group:
 
                 response_parsers.update(
                     {
-                        join_paths(self._base, endpoint.path): {
+                        join_paths(effective_base, endpoint.path): {
                             method: (
                                 model,
                                 status_code,
@@ -179,7 +190,7 @@ class Group:
 
                 response_parsers.update(
                     {
-                        join_paths(self._base, endpoint.path): {
+                        join_paths(effective_base, endpoint.path): {
                             method: (
                                 model,
                                 200,
@@ -192,7 +203,7 @@ class Group:
             elif return_type in Model.__subclasses__():
                 response_parsers.update(
                     {
-                        join_paths(self._base, endpoint.path): {
+                        join_paths(effective_base, endpoint.path): {
                             method: (
                                 return_type,
                                 200,
@@ -207,7 +218,7 @@ class Group:
             ):
                 response_parsers.update(
                     {
-                        join_paths(self._base, endpoint.path): {
+                        join_paths(effective_base, endpoint.path): {
                             method: (
                                 parse_to_source_type(
                                     return_type,
@@ -224,7 +235,7 @@ class Group:
 
                 response_parsers.update(
                     {
-                        join_paths(self._base, endpoint.path): {
+                        join_paths(effective_base, endpoint.path): {
                             method: (response_model, status)
                             for method in methods
                             for status, response_model in responses.items()
@@ -239,7 +250,7 @@ class Group:
         events.update(
             {
                 join_paths(
-                    self._base,
+                    effective_base,
                     path,
                 ): endpoint
                 for path, endpoint in endpoints.items()
@@ -247,12 +258,13 @@ class Group:
         )
         match_routes.update(routes)
 
-        for group in self._groups:
-            group._base = join_paths(self._base, group._base)
-
+        # Pass the effective prefix down rather than mutating each child's
+        # ``_base`` in place. Reusing the same Group instance under multiple
+        # parents (or simply re-running setup) used to accumulate the prefix.
         assembled_groups = self._gather_groups(
             instance_id,
             env,
+            parent_prefix=effective_base,
         )
 
         group_middleware = list(self._middleware)
@@ -292,7 +304,12 @@ class Group:
             "response_headers": response_headers,
         }
 
-    def _gather_hooks(self):
+    def _gather_hooks(self, effective_base: str | None = None):
+        # ``effective_base`` overrides ``self._base`` so a child group
+        # assembled under a parent uses the joined prefix without mutating
+        # ``self._base`` itself. Defaults to ``self._base`` for direct use.
+        if effective_base is None:
+            effective_base = self._base
         reserved = ["connect", "close"]
         endpoints: Dict[
             str, Callable[..., Awaitable[Model | Dict[Any, Any] | str]]
@@ -441,11 +458,11 @@ class Group:
                     required=fabricator.required_params,
                 )
 
-                fabricators[join_paths(self._base, handler.path)] = {
+                fabricators[join_paths(effective_base, handler.path)] = {
                     method: fabricator for method in methods
                 }
 
-                self._supported_handlers[join_paths(self._base, handler.path)] = {
+                self._supported_handlers[join_paths(effective_base, handler.path)] = {
                     method: handler for method in methods
                 }
 
@@ -462,7 +479,7 @@ class Group:
         )
 
     def _gather_groups(
-        self, instance_id: int, env: Env
+        self, instance_id: int, env: Env, parent_prefix: str = ""
     ) -> List[
         Dict[
             Literal[
@@ -483,6 +500,11 @@ class Group:
         ]
     ]:
         return [
-            group._assemble(instance_id, env, self._middleware)
+            group._assemble(
+                instance_id,
+                env,
+                self._middleware,
+                parent_prefix=parent_prefix,
+            )
             for group in self._groups
         ]

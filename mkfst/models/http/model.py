@@ -1,6 +1,6 @@
 from __future__ import annotations
 import msgspec
-import hyperjson
+import orjson
 from typing import TypeVar
 
 
@@ -10,31 +10,39 @@ T = TypeVar("T", bound=dict)
 class Model(msgspec.Struct):
     @classmethod
     def model_json_schema(cls, ref_template: str | None = None):
+        """Return the JSON Schema for ``cls`` suitable for OpenAPI emission.
+
+        When ``ref_template`` is supplied (with the ``{name}`` placeholder
+        per msgspec convention), nested-model ``$ref`` values are
+        substituted per nested type rather than collapsed to the outer
+        class name.
+
+        Pre-fix the implementation pre-substituted ``{model}`` to
+        ``cls.__name__`` BEFORE handing the template to msgspec, leaving
+        msgspec with no placeholder. Every nested ``$ref`` then collapsed
+        to the outer class name and emitted OpenAPI documents were
+        unparseable by Swagger UI / ReDoc / openapi-generator.
+        """
         if ref_template:
-            components: tuple[dict[str, dict]] = msgspec.json.schema_components(
+            schemas, defs = msgspec.json.schema_components(
                 [cls],
-                ref_template=ref_template.format(model=cls.__name__),
+                ref_template=ref_template,
             )
 
-            schema_properties = {}
+            # ``defs`` is the dict of all named types referenced by the
+            # input set (including ``cls`` itself). Pull out cls's own
+            # schema and re-attach the remaining defs under ``$defs`` so
+            # the docs pipeline can hoist them into ``components/schemas``.
+            own = dict(defs.pop(cls.__name__, schemas[0] if schemas else {}))
+            if defs:
+                own["$defs"] = defs
+            return own
 
-            for item in components:
-                if isinstance(item, dict):
-                    schema_properties.update(
-                        item.get(
-                            "$defs",
-                            {},
-                        ).get(cls.__name__, {})
-                    )
-
-            return schema_properties
-
-        else:
-            component: dict[str, dict] = msgspec.json.schema(cls)
-            return component.get(
-                "$defs",
-                {},
-            ).get(cls.__name__, {})
+        component: dict[str, dict] = msgspec.json.schema(cls)
+        return component.get(
+            "$defs",
+            {},
+        ).get(cls.__name__, {})
 
     @classmethod
     def defaults(cls):
@@ -63,7 +71,7 @@ class Model(msgspec.Struct):
 
     def model_dump_json(self, exclude_none: bool = False):
         if exclude_none:
-            return hyperjson.dumps(
+            return orjson.dumps(
                 {
                     key: value.model_dump() if isinstance(value, Model) else value
                     for key, value in msgspec.structs.asdict(self).items()
@@ -71,7 +79,7 @@ class Model(msgspec.Struct):
                 }
             )
 
-        return hyperjson.dumps(
+        return orjson.dumps(
             {
                 key: value.model_dump() if isinstance(value, Model) else value
                 for key, value in msgspec.structs.asdict(self).items()

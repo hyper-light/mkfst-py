@@ -62,7 +62,16 @@ class MercurySyncTCPConnection:
         self._client_ssl_context: Union[ssl.SSLContext, None] = None
         self._server_ssl_context: Union[ssl.SSLContext, None] = None
 
-        self._encryptor = AESGCMFernet(env)
+        # Only build the wire-encryption AEAD when the server actually
+        # opts into it. AESGCMFernet's constructor demands a non-empty
+        # MERCURY_SYNC_AUTH_SECRET, so unconditionally instantiating it
+        # would force every server (including this example, which does
+        # not enable wire encryption) to set a secret it never uses.
+        self._encryptor = (
+            AESGCMFernet(env)
+            if env.MERCURY_SYNC_USE_HTTP_MSYNC_ENCRYPTION
+            else None
+        )
         self._semaphore: Union[asyncio.Semaphore, None] = None
         self._compressor: Union[zstandard.ZstdCompressor, None] = None
         self._decompressor: Union[zstandard.ZstdDecompressor, None] = None

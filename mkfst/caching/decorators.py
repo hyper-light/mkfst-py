@@ -2,11 +2,28 @@ import asyncio
 import functools
 import inspect
 import logging
+import weakref
 
 from mkfst.caching.base import SENTINEL
 from mkfst.caching.lock import RedLock
 
 logger = logging.getLogger(__name__)
+
+
+# CPython 3.11+ only weakly references tasks created via
+# ``asyncio.create_task``. A fire-and-forget task without a strong handle
+# can be garbage-collected before completion, silently dropping cache
+# writes. A module-level WeakSet tracks live background tasks so they
+# survive until they're done; the WeakSet itself doesn't prevent GC after
+# completion.
+_BACKGROUND_TASKS: "weakref.WeakSet[asyncio.Task]" = weakref.WeakSet()
+
+
+def _spawn_background(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(lambda t: _BACKGROUND_TASKS.discard(t))
+    return task
 
 
 class cached:
@@ -77,7 +94,7 @@ class cached:
                 await self.set_in_cache(key, result)
             else:
                 # TODO: Use aiojobs to avoid warnings.
-                asyncio.create_task(self.set_in_cache(key, result))
+                _spawn_background(self.set_in_cache(key, result))
 
         return result
 
@@ -287,7 +304,7 @@ class multi_cached:
                 await self.set_in_cache(to_cache, f, args, kwargs)
             else:
                 # TODO: Use aiojobs to avoid warnings.
-                asyncio.create_task(self.set_in_cache(to_cache, f, args, kwargs))
+                _spawn_background(self.set_in_cache(to_cache, f, args, kwargs))
 
         return result
 

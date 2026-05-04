@@ -2,10 +2,10 @@ import hashlib
 
 import ecdsa
 
-from jose.backends.base import Key
-from jose.constants import ALGORITHMS
-from jose.exceptions import JWKError
-from jose.utils import base64_to_long, long_to_base64
+from .base import Key
+from ..constants import ALGORITHMS
+from ..exceptions import JWKError
+from ..utils import base64_to_long, long_to_base64
 
 
 class ECDSAECKey(Key):

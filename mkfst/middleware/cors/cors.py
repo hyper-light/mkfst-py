@@ -1,18 +1,40 @@
-from typing import (
-    Any,
-    List,
-    Literal,
-    Optional,
-    Union,
-)
+"""CORS middleware aligned with the WHATWG Fetch spec.
 
-from mkfst.logging import Logger, LogLevel
+Avoids the patterns audited as defective in the prior implementation:
+
+* Origin is never reflected when the configured allowlist is wildcard AND
+  credentials are enabled — that combination is rejected at construction
+  time as the textbook bypass of the credentialed-CORS guard.
+* Allow-Origin is rendered as a single value (per spec; the header is
+  single-value), with ``Vary: Origin`` whenever the response varies on
+  origin so caches don't blend responses across origins.
+* Preflight rejection responses do NOT advertise any ``Access-Control-
+  Allow-*`` headers — the browser sees the absence as a refusal.
+* ``Access-Control-Max-Age`` is rendered as an integer, not the literal
+  string ``"true"`` / ``"false"``.
+
+Short-circuit returns use empty *string* bodies (not ``b""``) so the
+response builder's existing str-only path serializes them cleanly.
+"""
+
+from __future__ import annotations
+
+from typing import Any, List, Literal, Optional, Set, Union
+
 from mkfst.middleware.base import Middleware
 from mkfst.middleware.base.response_context import ResponseContext
 from mkfst.middleware.base.types import Handler, MiddlewareHandler, MiddlewareResult
-from mkfst.models.logging import Event
 
-from .cors_headers import CorsHeaders
+from .cors_headers import (
+    SAFE_REQUEST_HEADERS,
+    render_headers,
+    render_max_age,
+    render_methods,
+)
+
+
+class CorsConfigurationError(ValueError):
+    """Raised when the configured CORS policy violates the Fetch spec."""
 
 
 class Cors(Middleware):
@@ -24,44 +46,96 @@ class Cors(Middleware):
         ] = None,
         access_control_expose_headers: Optional[List[str]] = None,
         access_control_max_age: Optional[Union[int, float]] = None,
-        access_control_allow_credentials: Optional[bool] = None,
+        access_control_allow_credentials: bool = False,
         access_control_allow_headers: Optional[List[str]] = None,
     ) -> None:
-        self._cors_config = CorsHeaders(
-            access_control_allow_origin=access_control_allow_origin,
-            access_control_expose_headers=access_control_expose_headers,
-            access_control_max_age=access_control_max_age,
-            access_control_allow_credentials=access_control_allow_credentials,
-            access_control_allow_methods=access_control_allow_methods,
-            access_control_allow_headers=access_control_allow_headers,
+        if not access_control_allow_origin:
+            raise CorsConfigurationError(
+                "access_control_allow_origin must be a non-empty list"
+            )
+        if not access_control_allow_methods:
+            raise CorsConfigurationError(
+                "access_control_allow_methods must be a non-empty list"
+            )
+
+        allow_all_origins = "*" in access_control_allow_origin
+        if allow_all_origins and access_control_allow_credentials:
+            raise CorsConfigurationError(
+                "Cannot combine wildcard origin (*) with allow_credentials=True; "
+                "browsers reject this and treating it as 'reflect' is a known "
+                "auth-bypass pattern"
+            )
+
+        self._origins: Set[str] = set(access_control_allow_origin)
+        self._allow_all_origins = allow_all_origins
+        self._methods = list(access_control_allow_methods)
+        self._allow_headers = (
+            [h.lower() for h in access_control_allow_headers]
+            if access_control_allow_headers
+            else []
+        )
+        self._allow_all_headers = "*" in self._allow_headers
+        self._allow_credentials = bool(access_control_allow_credentials)
+        self._expose_headers = list(access_control_expose_headers or ())
+        self._max_age = access_control_max_age
+
+        # Pre-compute the static portions of the preflight response so each
+        # OPTIONS request only pays for the dynamic Origin/Headers echo.
+        self._preflight_static: dict[str, str] = {
+            "Access-Control-Allow-Methods": render_methods(self._methods),
+        }
+        if self._max_age is not None:
+            self._preflight_static["Access-Control-Max-Age"] = render_max_age(
+                self._max_age
+            )
+        if self._allow_credentials:
+            self._preflight_static["Access-Control-Allow-Credentials"] = "true"
+
+        self._needs_vary = not self._allow_all_origins
+        self._allowed_header_set: Set[str] = (
+            SAFE_REQUEST_HEADERS | set(self._allow_headers)
         )
 
-        self.origins = self._cors_config.access_control_allow_origin
-        self.cors_methods = self._cors_config.access_control_allow_methods
-        self.cors_headers = self._cors_config.access_control_allow_headers
-        self.allow_credentials = self._cors_config.access_control_allow_credentials
+        super().__init__(self.__class__.__name__, methods=["OPTIONS"])
 
-        self.allow_all_origins = "*" in self._cors_config.access_control_allow_origin
+    def _origin_allowed(self, origin: str | None) -> bool:
+        if origin is None:
+            return False
+        if self._allow_all_origins:
+            return True
+        return origin in self._origins
 
-        allowed_headers = self._cors_config.access_control_allow_headers
-        self.allow_all_headers = False
+    def _resolve_acao(self, origin: str | None) -> str | None:
+        if not self._origin_allowed(origin):
+            return None
+        if self._allow_credentials:
+            return origin
+        if self._allow_all_origins:
+            return "*"
+        return origin
 
-        if allowed_headers:
-            self.allow_all_headers = "*" in allowed_headers
+    @staticmethod
+    def _lookup(headers: dict[str, Any], name: str) -> str | None:
+        if not headers:
+            return None
+        if name in headers:
+            return headers[name]
+        lower = name.lower()
+        for k, v in headers.items():
+            if k.lower() == lower:
+                return v
+        return None
 
-        self.simple_headers = self._cors_config.to_simple_headers()
-        self.preflight_headers = self._cors_config.to_preflight_headers()
-        self.preflight_explicit_allow_origin = (
-            not self.allow_all_origins or self.allow_credentials
-        )
-
-        self._logger = Logger()
-
-        super().__init__(
-            self.__class__.__name__,
-            methods=["OPTIONS"],
-            response_headers=self._cors_config.to_headers(),
-        )
+    def _requested_headers_allowed(self, requested: str) -> bool:
+        if self._allow_all_headers:
+            return True
+        for header in requested.split(","):
+            normalized = header.strip().lower()
+            if not normalized:
+                continue
+            if normalized not in self._allowed_header_set:
+                return False
+        return True
 
     async def __run__(
         self,
@@ -69,141 +143,88 @@ class Cors(Middleware):
         response: Any | None = None,
         handler: MiddlewareHandler | Handler | None = None,
     ) -> MiddlewareResult:
-        async with self._logger.context(
-            template="{timestamp} - {level} - {thread_id} - {message}",
-        ) as ctx:
-            
-            await ctx.log(Event(
-                level=LogLevel.DEBUG,
-                message=f'Request - {context.method} {context.path}:{context.ip_address} - Verifying request meets CORS policy'
-            ))
-            
-            headers = context.get_headers()
-            method = context.method
+        if context is None:
+            raise RuntimeError("Cors middleware requires a ResponseContext")
 
-            if headers:            
-                parsed_headers = headers.model_dump()
+        request_headers = context.request_headers or {}
+        origin = self._lookup(request_headers, "origin")
 
-            else:
-                parsed_headers = {}
+        if context.method == "OPTIONS" and self._lookup(
+            request_headers, "access-control-request-method"
+        ):
+            return self._handle_preflight(context, response, origin, request_headers)
 
-            origin = parsed_headers.get("origin")
-            access_control_request_method: str | None = parsed_headers.get("access-control-request-method")
-            access_control_request_headers: str | None = parsed_headers.get("access-control-request-headers", "")
+        return self._decorate_actual(context, response, origin)
 
-            if method == "OPTIONS" and access_control_request_method:
-                await ctx.log(Event(
-                    level=LogLevel.DEBUG,
-                    message=f'Request - {context.method} {context.path}:{context.ip_address} - Verifying OPTIONS request meets CORS policy'
-                ))
+    def _handle_preflight(
+        self,
+        context: ResponseContext,
+        response: Any,
+        origin: str | None,
+        request_headers: dict[str, Any],
+    ) -> MiddlewareResult:
+        acao = self._resolve_acao(origin)
+        requested_method = self._lookup(
+            request_headers, "access-control-request-method"
+        )
+        requested_headers = (
+            self._lookup(request_headers, "access-control-request-headers") or ""
+        )
 
-                response_headers = dict(self.preflight_headers)
+        ok = (
+            acao is not None
+            and requested_method in self._methods
+            and self._requested_headers_allowed(requested_headers)
+        )
 
-                failures: List[str] = []
+        if not ok:
+            # Per Fetch spec, a preflight failure is signalled by responding
+            # *without* the Allow headers — browsers reject the actual
+            # request from the absence. 204 = success-with-no-body.
+            context.status = 204
+            return (context, ""), False
 
-                if self.allow_all_origins is False and origin not in self.origins:
-                    failures.append("origin")
-                    await ctx.log(Event(
-                        level=LogLevel.DEBUG,
-                        message=f'Request - {context.method} {context.path}:{context.ip_address} - Origin of {origin} failed Allowed Origin policy'
-                    ))
+        out: dict[str, str] = dict(self._preflight_static)
+        out["Access-Control-Allow-Origin"] = acao
 
-                elif self.preflight_explicit_allow_origin:
-                    response["Access-Control-Allow-Origin"] = origin
+        if self._allow_all_headers:
+            if requested_headers:
+                out["Access-Control-Allow-Headers"] = requested_headers
+        elif self._allowed_header_set:
+            allowed = sorted(self._allowed_header_set)
+            out["Access-Control-Allow-Headers"] = render_headers(allowed)
 
-                    await ctx.log(Event(
-                        level=LogLevel.DEBUG,
-                        message=f'Request - {context.method} {context.path}:{context.ip_address} - Adding preflight origin of {origin}'
-                    ))
+        if self._needs_vary:
+            out["Vary"] = "Origin"
 
-                if access_control_request_method not in self.cors_methods:
-                    failures.append("method")
-                    await ctx.log(Event(
-                        level=LogLevel.DEBUG,
-                        message=f'Request - {context.method} {context.path}:{context.ip_address} - Method of {method} failed Allowed Methods policy'
-                    ))
+        context.response_headers.update(out)
+        context.status = 204
+        return (context, ""), False
 
-                if self.allow_all_headers and access_control_request_headers is not None:
-                    response_headers["Access-Control-Allow-Headers"] = (
-                        access_control_request_headers
-                    )
-                    await ctx.log(Event(
-                        level=LogLevel.DEBUG,
-                        message=f'Request - {context.method} {context.path}:{context.ip_address} - Adding CORS headers to response'
-                    ))
+    def _decorate_actual(
+        self,
+        context: ResponseContext,
+        response: Any,
+        origin: str | None,
+    ) -> MiddlewareResult:
+        if origin is None:
+            if self._needs_vary:
+                context.response_headers.setdefault("Vary", "Origin")
+            return (context, response), True
 
-                elif access_control_request_headers:
-                    for header in access_control_request_headers.split(","):
-                        if header.lower().strip() not in self.cors_headers:
-                            failures.append("headers")
-                            await ctx.log(Event(
-                                level=LogLevel.DEBUG,
-                                message=f'Request - {context.method} {context.path}:{context.ip_address} - Header of {header} failed Allowed Headers policy'
-                            ))
+        acao = self._resolve_acao(origin)
+        if acao is None:
+            if self._needs_vary:
+                context.response_headers.setdefault("Vary", "Origin")
+            return (context, response), True
 
-                            break
-
-                if len(failures) > 0:
-                    failures_message = ", ".join(failures)
-                    context.status = 401
-
-                    context.errors.append(
-                        Exception(failures_message)
-                    )
-
-                    await ctx.log(Event(
-                        level=LogLevel.ERROR,
-                        message=f'Request - {context.method} {context.path}:{context.ip_address} - Rejected by CORS policy with status of {context.status}'
-                    ))
-
-                    return (
-                        context,
-                        f"Disallowed CORS {failures_message}",
-                    ), False
-
-
-                context.response_headers.update(response_headers)
-
-                context.errors.append(
-                    Exception('Rejected by CORS policy')
-                )
-
-                await ctx.log(Event(
-                    level=LogLevel.ERROR,
-                    message=f'Request - {context.method} {context.path}:{context.ip_address} - Rejected by CORS policy with status of {context.status}'
-                ))
-
-                return (
-                    context,
-                    response,
-                ), False
-
-            response_headers = dict(self.simple_headers)
-
-            if self.allow_all_origins and parsed_headers.get("cookie"):
-                response_headers["access-control-allow-origin"] = origin
-
-                await ctx.log(Event(
-                    level=LogLevel.DEBUG,
-                    message=f'Request - {context.method} {context.path}:{context.ip_address} - Adding allowed origin of {origin}'
-                ))
-
-            elif origin in self.origins:
-                response_headers["access-control-allow-origin"] = origin
-
-                await ctx.log(Event(
-                    level=LogLevel.DEBUG,
-                    message=f'Request - {context.method} {context.path}:{context.ip_address} - Adding allowed origin of {origin}'
-                ))
-
-            context.response_headers.update(response_headers)
-
-            await ctx.log(Event(
-                level=LogLevel.DEBUG,
-                message=f'Request - {context.method} {context.path}:{context.ip_address} - Request met CORS policy'
-            ))
-
-            return (
-                context,
-                response,
-            ), True
+        context.response_headers["Access-Control-Allow-Origin"] = acao
+        if self._needs_vary or self._allow_credentials:
+            context.response_headers["Vary"] = "Origin"
+        if self._allow_credentials:
+            context.response_headers["Access-Control-Allow-Credentials"] = "true"
+        if self._expose_headers:
+            context.response_headers["Access-Control-Expose-Headers"] = render_headers(
+                self._expose_headers
+            )
+        return (context, response), True

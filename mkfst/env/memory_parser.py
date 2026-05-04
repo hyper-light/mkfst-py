@@ -28,17 +28,21 @@ class MemoryParser:
         }
         
         
+        # Pre-fix the regex matched ``[smhdw]`` (time-unit characters), so
+        # any ``"512mb"`` / ``"2gb"`` value silently fell through to the
+        # ``megabytes`` default. Correct token set is ``[kmg]b?`` (case
+        # insensitive); the ``b?`` keeps ``"512m"`` working too.
         parsed_size = {
             self.UNITS.get(
-                m.group(
-                    'unit'
-                ).lower(), 
-                'megabytes'
+                m.group('unit').lower().rstrip('b') + 'b'
+                if m.group('unit')
+                else 'mb',
+                'megabytes',
             ): float(m.group('val'))
             for m in re.finditer(
-                r'(?P<val>\d+(\.\d+)?)(?P<unit>[smhdw]?)', 
-                time_amount, 
-                flags=re.I
+                r'(?P<val>\d+(\.\d+)?)\s*(?P<unit>[kmg]b?)?',
+                time_amount,
+                flags=re.I,
             )
         }
 

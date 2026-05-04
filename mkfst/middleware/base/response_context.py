@@ -36,6 +36,7 @@ class ResponseContext:
         "request_addr",
         "protocol",
         "upgrade_port",
+        "principal",
     )
 
     def __init__(
@@ -79,6 +80,7 @@ class ResponseContext:
         self.compression_level: int | None = None
         self.request_addr = request_addr
         self.upgrade_port = upgrade_port
+        self.principal: Any | None = None
 
     def update(self, context: ResponseContext):
         self.request_headers.update(context.request_headers)

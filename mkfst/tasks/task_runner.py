@@ -68,7 +68,10 @@ class TaskRunner:
         )
         self._loop = asyncio.get_event_loop()
 
-        for sig in [signal.SIGINT, signal.SIGTERM, signal.SIG_IGN]:
+        # SIG_IGN is a *handler value*, not a signal number. Including it
+        # here raises ValueError in add_signal_handler and disabled SIGINT
+        # / SIGTERM cleanup whenever this initializer was hit.
+        for sig in [signal.SIGINT, signal.SIGTERM]:
             default_handler = signal.getsignal(sig)
 
             self._loop.add_signal_handler(

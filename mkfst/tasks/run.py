@@ -280,27 +280,27 @@ class Run:
         if self._process:
             try:
                 self._process.terminate()
-
             except Exception:
                 pass
 
-        try:
-            self._task.set_result(None)
-
-        except Exception:
-            pass
+        # asyncio.Task does not support set_result (the task's result is
+        # produced by the running coroutine); pre-fix every cancel call
+        # raised. The right primitive is .cancel(); the coroutine sees
+        # CancelledError on its next await and unwinds.
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
 
         self.status = RunStatus.CANCELLED
 
     def abort(self):
         if self._process:
-            self._process.kill()
+            try:
+                self._process.kill()
+            except Exception:
+                pass
 
-        try:
-            self._task.set_result(None)
-
-        except Exception:
-            pass
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
 
         self.status = RunStatus.CANCELLED
 
@@ -351,11 +351,18 @@ class Run:
 
         try:
             if shell:
-                command = [self.call]
-                command.extend(args)
+                # ``asyncio.create_subprocess_shell`` runs through
+                # ``/bin/sh -c`` which makes any unquoted argument a
+                # code-injection vector. ``shlex.quote`` each arg so
+                # callers can pass filenames, URLs, etc. without manual
+                # escaping.
+                import shlex
+
+                quoted_args = [shlex.quote(str(arg)) for arg in args]
+                command_line = " ".join([self.call, *quoted_args])
 
                 self._process = await asyncio.create_subprocess_shell(
-                    " ".join(command),
+                    command_line,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     env=env,

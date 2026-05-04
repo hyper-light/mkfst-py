@@ -12,7 +12,7 @@ from typing import (
     get_args,
 )
 
-import hyperjson
+import orjson
 
 from mkfst.models import (
     HTML,
@@ -539,10 +539,10 @@ class Fabricator:
                     body = annotation(content=request_data.strip().decode())
 
                 case "model":
-                    body = annotation(**hyperjson.loads(request_data))
+                    body = annotation(**orjson.loads(request_data))
 
                 case "json":
-                    body = hyperjson.loads(request_data)
+                    body = orjson.loads(request_data)
 
                 case "body":
                     body = Body(content=request_data.strip())

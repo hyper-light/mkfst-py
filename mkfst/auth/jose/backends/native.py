@@ -2,10 +2,10 @@ import hashlib
 import hmac
 import os
 
-from jose.backends.base import Key
-from jose.constants import ALGORITHMS
-from jose.exceptions import JWKError
-from jose.utils import base64url_decode, base64url_encode, is_pem_format, is_ssh_key
+from .base import Key
+from ..constants import ALGORITHMS
+from ..exceptions import JWKError
+from ..utils import base64url_decode, base64url_encode, is_pem_format, is_ssh_key
 
 
 def get_random_bytes(num_bytes):

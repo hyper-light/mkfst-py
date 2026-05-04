@@ -1,5 +1,5 @@
 import binascii
-import hyperjson
+import orjson
 from pydantic import JsonValue
 
 try:
@@ -60,6 +60,54 @@ def sign(
     return signed_output
 
 
+def _normalize_algorithms(algorithms) -> tuple[str, ...]:
+    """Validate and freeze the caller-supplied algorithm allowlist.
+
+    Per RFC 8725 §3.1, ``alg=none`` MUST NOT be accepted by a verifier; we
+    reject inclusion of ``"none"`` in the allowlist itself so callers
+    cannot accidentally round-trip an unauthenticated token.
+
+    Mixed HMAC + asymmetric allowlists are also rejected: combining
+    HS* with RS*/ES* is the textbook alg-confusion configuration in which
+    an attacker who knows the public key forges an HS256 token that the
+    server validates by HMAC-ing with the public-key bytes.
+    """
+    if algorithms is None:
+        raise JWSError(
+            "An explicit algorithms allowlist is required when verifying a JWS. "
+            "Pass e.g. algorithms=['HS256'] or algorithms=['RS256']."
+        )
+    if isinstance(algorithms, str):
+        algorithms = (algorithms,)
+    else:
+        algorithms = tuple(algorithms)
+
+    if not algorithms:
+        raise JWSError("algorithms must be a non-empty list")
+
+    for alg in algorithms:
+        if not isinstance(alg, str):
+            raise JWSError(
+                f"algorithms must be strings; got {type(alg).__name__}"
+            )
+        if alg.lower() == "none":
+            raise JWSError(
+                "alg=none is unauthenticated and cannot be in the allowlist"
+            )
+
+    has_hmac = any(a in ALGORITHMS.HMAC for a in algorithms)
+    has_asym = any(
+        a in ALGORITHMS.RSA_DS or a in ALGORITHMS.EC_DS for a in algorithms
+    )
+    if has_hmac and has_asym:
+        raise JWSError(
+            "algorithms allowlist cannot mix HMAC (HS*) with asymmetric "
+            "(RS*/ES*) entries; this enables alg-confusion attacks"
+        )
+
+    return algorithms
+
+
 def verify(token: str, key: str, algorithms, verify=True):
     """Verifies a JWS string's signature.
 
@@ -85,6 +133,7 @@ def verify(token: str, key: str, algorithms, verify=True):
     header, payload, signing_input, signature = _load(token)
 
     if verify:
+        algorithms = _normalize_algorithms(algorithms)
         _verify_signature(signing_input, header, signature, key, algorithms)
 
     return payload
@@ -146,7 +195,7 @@ def _encode_header(algorithm, additional_headers=None):
     if additional_headers:
         header.update(additional_headers)
 
-    json_header: bytes = hyperjson.dumps(header)
+    json_header: bytes = orjson.dumps(header)
 
     return base64url_encode(json_header)
 
@@ -154,7 +203,7 @@ def _encode_header(algorithm, additional_headers=None):
 def _encode_payload(payload: dict[str, JsonValue]):
     if isinstance(payload, Mapping):
         try:
-            payload: bytes = hyperjson.dumps(payload)
+            payload: bytes = orjson.dumps(payload)
         except ValueError:
             pass
 
@@ -195,7 +244,7 @@ def _load(jwt: str | bytes):
         raise JWSError("Invalid header padding")
 
     try:
-        header: dict[bytes, bytes] = hyperjson.loads(header_data)
+        header: dict[bytes, bytes] = orjson.loads(header_data)
     except ValueError as e:
         raise JWSError("Invalid header string: %s" % e)
 
@@ -237,7 +286,11 @@ def _get_keys(key: str | Key):
         return (key,)
 
     try:
-        key = hyperjson.loads(key, parse_int=str, parse_float=str)
+        # orjson preserves arbitrary-precision integers as Python ints
+        # natively, so the original ``parse_int=str, parse_float=str`` kwargs
+        # are unnecessary. JWK key params are base64url-encoded strings
+        # anyway; integers in the JSON would only be metadata fields.
+        key = orjson.loads(key)
     except Exception:
         pass
 
@@ -277,8 +330,15 @@ def _verify_signature(
     if not alg:
         raise JWSError("No algorithm was specified in the JWS header.")
 
-    if algorithms is not None and alg not in algorithms:
-        raise JWSError("The specified alg value is not allowed")
+    # Defense in depth: reject alg=none even if the allowlist somehow
+    # contained it. ``_normalize_algorithms`` already rejects this at the
+    # API surface, but ``_verify_signature`` is also reachable from
+    # internal call sites that bypass the surface.
+    if alg.lower() == "none":
+        raise JWSError("alg=none tokens cannot be verified")
+
+    if algorithms is None or alg not in algorithms:
+        raise JWSError(f"The specified alg value {alg!r} is not allowed")
 
     keys = _get_keys(key)
     try:

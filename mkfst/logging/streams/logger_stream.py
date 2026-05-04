@@ -60,6 +60,78 @@ def patch_transport_close(
     return close
 
 
+class _DirectStreamWriter:
+    """Drop-in for ``asyncio.StreamWriter`` when the underlying file is not
+    pipe/socket/char-device backed (pytest capture, output redirected to a
+    regular file, etc.). Writes are queued and flushed via the loop's
+    default executor so the event loop is never blocked on disk I/O.
+
+    Lives here as a fallback only — when stdout/stderr ARE pipe-able the
+    real ``connect_write_pipe`` path is taken and this class is unused.
+    """
+
+    __slots__ = ("_loop", "_stream", "_buffer", "_closed")
+
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        stream,
+    ) -> None:
+        self._loop = loop
+        self._stream = stream
+        self._buffer: list[bytes] = []
+        self._closed = False
+
+    def write(self, data: bytes) -> None:
+        if self._closed:
+            return
+        self._buffer.append(data)
+
+    def writelines(self, data) -> None:
+        for chunk in data:
+            self.write(chunk)
+
+    async def drain(self) -> None:
+        if self._closed or not self._buffer:
+            return
+        chunks, self._buffer = self._buffer, []
+        await self._loop.run_in_executor(None, self._flush_chunks, chunks)
+
+    def _flush_chunks(self, chunks: list[bytes]) -> None:
+        try:
+            buffer = getattr(self._stream, "buffer", None)
+            target = buffer if buffer is not None else self._stream
+            mode = getattr(target, "mode", "b")
+            for chunk in chunks:
+                if isinstance(chunk, (bytes, bytearray, memoryview)) and "b" not in mode:
+                    target.write(chunk.decode("utf-8", "replace"))
+                else:
+                    target.write(chunk)
+            try:
+                target.flush()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._buffer:
+            try:
+                self._flush_chunks(self._buffer)
+            except Exception:
+                pass
+            self._buffer = []
+
+    async def wait_closed(self) -> None:
+        return
+
+    def is_closing(self) -> bool:
+        return self._closed
+
+
 class LoggerStream:
     def __init__(
         self,
@@ -177,44 +249,37 @@ class LoggerStream:
                 self._stderr = await self._dup_stderr()
 
             if self._stream_writers.get(StreamType.STDOUT) is None:
-                transport, protocol = await self._loop.connect_write_pipe(
-                    lambda: LoggerProtocol(), self._stdout
-                )
-
-                try:
-                    if has_uvloop:
-                        transport.close = patch_transport_close(transport, self._loop)
-
-                except Exception:
-                    pass
-
-                self._stream_writers[StreamType.STDOUT] = asyncio.StreamWriter(
-                    transport,
-                    protocol,
-                    None,
-                    self._loop,
+                self._stream_writers[StreamType.STDOUT] = (
+                    await self._make_writer(self._stdout)
                 )
 
             if self._stream_writers.get(StreamType.STDERR) is None:
-                transport, protocol = await self._loop.connect_write_pipe(
-                    lambda: LoggerProtocol(), self._stderr
-                )
-
-                try:
-                    if has_uvloop:
-                        transport.close = patch_transport_close(transport, self._loop)
-
-                except Exception:
-                    pass
-
-                self._stream_writers[StreamType.STDERR] = asyncio.StreamWriter(
-                    transport,
-                    protocol,
-                    None,
-                    self._loop,
+                self._stream_writers[StreamType.STDERR] = (
+                    await self._make_writer(self._stderr)
                 )
 
             self._initialized = True
+
+    async def _make_writer(self, stream):
+        """Attach the stream to a write-pipe transport when possible; fall
+        back to a thread-pool writer when the underlying fd isn't a
+        pipe/socket/char device (e.g. pytest capture, stdout redirected to
+        a regular file). Pre-fix the unconditional ``connect_write_pipe``
+        raised ValueError on every server started in those environments."""
+        try:
+            transport, protocol = await self._loop.connect_write_pipe(
+                lambda: LoggerProtocol(), stream
+            )
+        except (ValueError, OSError):
+            return _DirectStreamWriter(self._loop, stream)
+
+        try:
+            if has_uvloop:
+                transport.close = patch_transport_close(transport, self._loop)
+        except Exception:
+            pass
+
+        return asyncio.StreamWriter(transport, protocol, None, self._loop)
 
     async def open_file(
         self,
@@ -289,25 +354,60 @@ class LoggerStream:
             str(resolved_path.parent.absolute().resolve()), ".logging.json"
         )
 
-        if os.path.exists(logfile_metadata_path):
-            metadata_file = open(logfile_metadata_path, "+rb")
-            return msgspec.json.decode(metadata_file.read())
+        if not os.path.exists(logfile_metadata_path):
+            return {}
 
-        return {}
+        # ``with`` so the descriptor doesn't leak; the previous open() was
+        # never closed and accumulated handles per call.
+        try:
+            with open(logfile_metadata_path, "rb") as metadata_file:
+                payload = metadata_file.read()
+            if not payload:
+                return {}
+            return msgspec.json.decode(payload)
+        except (OSError, msgspec.DecodeError):
+            # Concurrent rotator may have replaced the file mid-read, or
+            # the file is currently being rewritten; treat as empty so we
+            # re-stamp on the next update rather than crashing the writer.
+            return {}
 
     def _update_logfile_metadata(
         self,
         logfile_path: str,
         logfile_metadata: Dict[str, float],
     ):
+        """Atomically replace ``.logging.json`` so a crash mid-write
+        cannot leave a truncated metadata file behind. Pre-fix the writer
+        opened the target with mode ``+wb`` which truncates first; if the
+        process died between truncate and write the next read got an
+        empty file and the retention logic lost track of the file's
+        creation time."""
+        import tempfile
+
         resolved_path = pathlib.Path(logfile_path)
+        directory = str(resolved_path.parent.absolute().resolve())
+        logfile_metadata_path = os.path.join(directory, ".logging.json")
+        encoded = msgspec.json.encode(logfile_metadata)
 
-        logfile_metadata_path = os.path.join(
-            str(resolved_path.parent.absolute().resolve()), ".logging.json"
+        # Write to a sibling temp file in the same directory (rename is
+        # only atomic across files on the same filesystem), fsync, then
+        # ``os.replace`` into place. ``os.replace`` is atomic on both
+        # POSIX and Windows.
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".logging.json.", suffix=".tmp", dir=directory
         )
-
-        with open(logfile_metadata_path, "+wb") as metadata_file:
-            metadata_file.write(msgspec.json.encode(logfile_metadata))
+        try:
+            with os.fdopen(fd, "wb") as tmp_file:
+                tmp_file.write(encoded)
+                tmp_file.flush()
+                os.fsync(tmp_file.fileno())
+            os.replace(tmp_path, logfile_metadata_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def _rotate_logfile(
         self,
@@ -330,35 +430,75 @@ class LoggerStream:
         archived_filename = f"{resolved_path.stem}_{current_timestamp}_archived.zst"
         logfile_data = b""
 
-        if (
-            retention_policy.matches_policy(
-                {
-                    "file_age": (
-                        current_time
-                        - datetime.datetime.fromtimestamp(created_time, datetime.UTC)
-                    ).seconds,
-                    "file_size": os.path.getsize(logfile_path),
-                    "logfile_path": resolved_path,
-                }
-            )
-            is False
-        ):
-            self._files[logfile_path].close()
+        import tempfile
 
-            with open(logfile_path, "rb") as logfile:
-                logfile_data = logfile.read()
+        within_limits = retention_policy.matches_policy(
+            {
+                "file_age": (
+                    current_time
+                    - datetime.datetime.fromtimestamp(created_time, datetime.UTC)
+                ).seconds,
+                "file_size": os.path.getsize(logfile_path),
+                "logfile_path": resolved_path,
+            }
+        )
 
-        if len(logfile_data) > 0:
-            archive_path = os.path.join(
-                str(resolved_path.parent.absolute().resolve()),
-                archived_filename,
-            )
+        if not within_limits:
+            # Flush + close the active handle so we read a consistent
+            # snapshot. We always reopen at the bottom regardless of
+            # whether an archive was actually produced (an empty file
+            # still needs a live writer; pre-fix the handle stayed
+            # closed and subsequent log lines hit a closed FD).
+            current_handle = self._files.get(logfile_path)
+            if current_handle is not None and not current_handle.closed:
+                try:
+                    current_handle.flush()
+                except Exception:
+                    pass
+                current_handle.close()
 
-            with open(archive_path, "wb") as archived_file:
-                archived_file.write(self._compressor.compress(logfile_data))
+            try:
+                with open(logfile_path, "rb") as logfile:
+                    logfile_data = logfile.read()
+            except FileNotFoundError:
+                logfile_data = b""
 
-            self._files[logfile_path] = open(path, "wb+")
-            created_time = current_timestamp
+            if logfile_data:
+                archive_path = os.path.join(
+                    str(resolved_path.parent.absolute().resolve()),
+                    archived_filename,
+                )
+                # Compress to a sibling temp file then atomically rename so
+                # the archive is either fully present or absent — never a
+                # half-written ``.zst`` that fails decompression on read.
+                directory = str(resolved_path.parent.absolute().resolve())
+                fd, tmp_path = tempfile.mkstemp(
+                    prefix=".archive.",
+                    suffix=".zst.tmp",
+                    dir=directory,
+                )
+                try:
+                    with os.fdopen(fd, "wb") as archived_file:
+                        archived_file.write(self._compressor.compress(logfile_data))
+                        archived_file.flush()
+                        os.fsync(archived_file.fileno())
+                    os.replace(tmp_path, archive_path)
+                except Exception:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
+
+                # Truncate the live logfile only after the archive is
+                # safely on disk.
+                with open(path, "wb"):
+                    pass
+                created_time = current_timestamp
+
+            # Always re-establish a writable handle, even if no archive
+            # was produced.
+            self._files[logfile_path] = open(path, "ab+")
 
         logfile_metadata[logfile_path] = created_time
 

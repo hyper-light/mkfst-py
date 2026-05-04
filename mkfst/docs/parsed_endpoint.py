@@ -66,4 +66,6 @@ class ParsedEndpoint(BaseModel):
     ) = None
 
     def to_dict(self):
-        return {field: getattr(self, field) for field in self.model_fields}
+        # Pydantic V2.11+ deprecated instance access of `model_fields`;
+        # use the class accessor.
+        return {field: getattr(self, field) for field in type(self).model_fields}

@@ -15,7 +15,8 @@ class TestParams(Parameters):
 class TestService(Service):
     @endpoint("/")
     async def get_service(self) -> str:
-        return "Hello World"
+        return "Hello World!"
+
 
     # @endpoint(
     #     "/post",

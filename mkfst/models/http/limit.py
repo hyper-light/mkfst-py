@@ -77,13 +77,11 @@ class Limit(msgspec.Struct):
         if self.rules is None:
             return True
 
-        matches_rules = False
-
+        # Pre-fix the loop overwrote ``matches_rules`` on every iteration
+        # so only the final rule's verdict survived. The semantics are AND
+        # across rules: a request matches a Limit when *every* configured
+        # rule matches.
         for rule in self.rules:
-            matches_rules = rule(
-                path,
-                method,
-                ip_address,
-            )
-
-        return matches_rules
+            if not rule(path, method, ip_address):
+                return False
+        return True

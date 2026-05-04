@@ -50,7 +50,7 @@ Raw = str | bytes
 
 
 JSON = Dict[HTTPEncodable, HTTPEncodable] | List[HTTPEncodable]
-REF_TEMPLATE = "#/components/schemas/{model}"
+REF_TEMPLATE = "#/components/schemas/{name}"
 
 
 ParamType = type[Parameter] | type[Header] | type[Query]
@@ -383,27 +383,27 @@ class EndpointParser:
             if header_name.lower() not in ["content-type"]
         }
 
+        # Snapshot first; pre-fix the loop iterated `self.responses` while
+        # the augmentation block mutated it, giving undefined ordering and
+        # silently dropping some defaults.
+        declared = dict(self.responses)
         responses: Dict[int, Dict[str, MediaType]] = {}
-        for status_code, response in self.responses.items():
+        for status_code, response in declared.items():
             responses[status_code] = self._parse_response_content(response)
 
-        if self.responses.get(500) is None:
-            self.responses[500] = InternalErrorSet
-
-        if responses.get(500, {}).get("application/json") is None:
+        if 500 not in declared:
+            declared[500] = InternalErrorSet
             responses[500] = self._parse_response_content(InternalErrorSet)
 
-        if self.responses.get(422) is None:
-            self.responses[422] = ValidationErrorGroup
+        if 422 not in declared:
+            declared[422] = ValidationErrorGroup
+            responses[422] = self._parse_response_content(ValidationErrorGroup)
 
-        if self.response_components.get(400) is None:
-            self.responses[400] = self._parse_response_content(BadRequestErrorSet)
-
-        if responses.get(400, {}).get("application/json") is None:
+        if 400 not in declared:
+            declared[400] = BadRequestErrorSet
             responses[400] = self._parse_response_content(BadRequestErrorSet)
 
-        if responses.get(422, {}).get("application/json") is None:
-            responses[422] = self._parse_response_content(ValidationErrorGroup)
+        self.responses = declared
 
         return {
             str(status_code): {
@@ -411,7 +411,7 @@ class EndpointParser:
                 "headers": parsed_response_headers,
                 "content": responses[status_code],
             }
-            for status_code, response in self.responses.items()
+            for status_code, response in declared.items()
         }
 
     def _parse_response_content(

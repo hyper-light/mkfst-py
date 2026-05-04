@@ -1,6 +1,9 @@
-import hyperjson
+from __future__ import annotations
+
+import orjson
 from calendar import timegm
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from typing import Any
 
 try:
     from collections.abc import Mapping
@@ -25,7 +28,7 @@ from .jws import (
 from .utils import calculate_at_hash, timedelta_total_seconds
 
 
-Claims = dict[str, str | datetime.date]
+Claims = dict[str, Any]
 
 
 def encode(
@@ -77,7 +80,7 @@ def encode(
 def decode(
     token,
     key,
-    algorithms=None,
+    algorithms,
     options=None,
     audience=None,
     issuer=None,
@@ -149,6 +152,11 @@ def decode(
 
     """
 
+    # SAFE-BY-DEFAULT REQUIREMENTS:
+    #   require_exp=True — a JWT without `exp` verifies forever once issued.
+    #   require_iat=True — forces the issuer to stamp issuance time so
+    #   verifiers can apply skew/age checks and logs can correlate.
+    # Callers can opt out via options={"require_exp": False, ...}.
     defaults = {
         "verify_signature": True,
         "verify_aud": True,
@@ -160,8 +168,8 @@ def decode(
         "verify_jti": True,
         "verify_at_hash": True,
         "require_aud": False,
-        "require_iat": False,
-        "require_exp": False,
+        "require_iat": True,
+        "require_exp": True,
         "require_nbf": False,
         "require_iss": False,
         "require_sub": False,
@@ -184,7 +192,7 @@ def decode(
     algorithm = get_unverified_header_jws(token)["alg"]
 
     try:
-        claims: Claims = hyperjson.loads(payload)
+        claims: Claims = orjson.loads(payload)
     except ValueError as e:
         raise JWTError("Invalid payload string: %s" % e)
 
@@ -260,7 +268,7 @@ def get_unverified_claims(token):
         raise JWTError("Error decoding token claims.")
 
     try:
-        claims: Claims = hyperjson.loads(claims)
+        claims: Claims = orjson.loads(claims)
     except ValueError as e:
         raise JWTError("Invalid claims string: %s" % e)
 

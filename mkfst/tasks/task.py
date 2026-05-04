@@ -113,40 +113,32 @@ class Task(Generic[T]):
     async def cancel_schedule(self, run_id: str):
         if run := self._runs.get(run_id) and self._schedules.get(run_id):
             self._schedule_running_statuses[run_id] = False
-
-            try:
-                self._schedules[run_id].set_result(None)
-
-            except Exception:
-                pass
-
+            self._cancel_schedule_task(run_id)
             await run.cancel()
 
     async def shutdown(self):
         for run in self._runs.values():
             await run.cancel()
-
             if self._schedules.get(run.run_id):
                 self._schedule_running_statuses[run.run_id] = False
-
-                try:
-                    self._schedules[run.run_id].set_result(None)
-
-                except Exception:
-                    pass
+                self._cancel_schedule_task(run.run_id)
 
     def abort(self):
         for run in self._runs.values():
             run.abort()
-
             if self._schedules.get(run.run_id):
                 self._schedule_running_statuses[run.run_id] = False
+                self._cancel_schedule_task(run.run_id)
 
-                try:
-                    self._schedules[run.run_id].set_result(None)
-
-                except Exception:
-                    pass
+    def _cancel_schedule_task(self, run_id):
+        """Cancel a scheduled-run task. ``self._schedules[run_id]`` is an
+        ``asyncio.Task``; calling ``set_result`` on a Task raises
+        ``InvalidStateError`` (the result must come from the coroutine).
+        Cancellation is the right primitive."""
+        task = self._schedules.get(run_id)
+        if task is None or task.done():
+            return
+        task.cancel()
 
     async def cleanup(self):
         match self.keep_policy:
@@ -164,14 +156,19 @@ class Task(Generic[T]):
                 pass
 
     async def _execute_count_policy(self):
+        # Pre-fix the slice was ``run_ids[:self.keep]`` which deleted the
+        # OLDEST `keep` runs and kept the newest minus those — i.e. a
+        # long-lived task with keep=10 would delete its first 10 runs and
+        # accumulate the rest unboundedly. The intent is to retain the
+        # most recent ``self.keep`` and discard everything older.
         removed_runs: List[Run] = []
         if len(self._runs) > self.keep:
             run_ids = list(sorted(self._runs))
-            for run_id in run_ids[: self.keep]:
+            for run_id in run_ids[: -self.keep]:
                 removed_runs.append(self._runs[run_id])
                 del self._runs[run_id]
 
-        if len(removed_runs) > 0:
+        if removed_runs:
             await asyncio.gather(
                 *[run.cancel() for run in removed_runs], return_exceptions=True
             )

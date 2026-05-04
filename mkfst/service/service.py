@@ -287,7 +287,7 @@ class Service(Generic[E]):
         self.groups = groups
 
         self._is_worker = False
-        self._engine: Union[InterpreterPoolExecutor, None] = None
+        self._engine: Union[ProcessPoolExecutor, None] = None
         self._tcp_queue: Dict[Tuple[str, int], asyncio.Queue] = defaultdict(
             asyncio.Queue
         )
@@ -865,7 +865,7 @@ class Service(Generic[E]):
                     Event(message=f"Initializing - {self._workers} - workers")
                 )
 
-                engine = InterpreterPoolExecutor(
+                engine = ProcessPoolExecutor(
                     max_workers=self._workers,
                     # mp_context=spawn,
                 )
@@ -901,10 +901,8 @@ class Service(Generic[E]):
                             ),
                             service_name,
                             json.dumps(msgspec.structs.asdict(self.env)),
-                            # self.groups,
-                            # config=config,
-                            None,
-                            None,
+                            self.groups,
+                            config,
                         ),
                     )
 

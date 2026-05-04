@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os
-import hyperjson
+import orjson
 import msgspec
 from ipaddress import IPv4Address, IPv6Address
 from typing import Callable, Dict, Literal, Union
@@ -49,12 +49,20 @@ class Env(msgspec.Struct, kw_only=True):
     MERCURY_SYNC_TCP_CONNECT_RETRIES: int = 3
     MERCURY_SYNC_CLEANUP_INTERVAL: str = "0.25s"
     MERCURY_SYNC_MAX_CONCURRENCY: int = 2048
-    MERCURY_SYNC_AUTH_SECRET: str = "testtoken"
+    # Empty default forces explicit configuration when encryption-dependent
+    # middleware (CSRF, AES wire encryption) is used. Validation lives in
+    # AESGCMFernet so unrelated servers don't pay the check at import time.
+    MERCURY_SYNC_AUTH_SECRET: str = ""
     MERCURY_SYNC_MULTICAST_GROUP: IPv4Address | IPv6Address = "224.1.1.1"
-    MERCURY_SYNC_LOGS_DIRECTORY: str = os.getcwd()
+    # Lazy via msgspec.field so `os.getcwd()` and `os.cpu_count()` are
+    # evaluated at instance construction (cwd may differ from import time)
+    # rather than at module import.
+    MERCURY_SYNC_LOGS_DIRECTORY: str = msgspec.field(default_factory=os.getcwd)
     MERCURY_SYNC_REQUEST_TIMEOUT: str = "30s"
     MERCURY_SYNC_LOG_LEVEL: str = "info"
-    MERCURY_SYNC_TASK_RUNNER_MAX_THREADS: int = os.cpu_count()
+    MERCURY_SYNC_TASK_RUNNER_MAX_THREADS: int = msgspec.field(
+        default_factory=lambda: os.cpu_count() or 1
+    )
     MERCURY_SYNC_MAX_REQUEST_CACHE_SIZE: int = 100
     MERCURY_SYNC_ENABLE_REQUEST_CACHING: bool = False
     MERCURY_SYNC_VERIFY_SSL_CERT: Literal["REQUIRED", "OPTIONAL", "NONE"] = "REQUIRED"
@@ -116,7 +124,7 @@ class Env(msgspec.Struct, kw_only=True):
 
     def model_dump_json(self, exclude_none: bool = False):
         if exclude_none:
-            return hyperjson.dumps(
+            return orjson.dumps(
                 {
                     key: value
                     for key, value in msgspec.structs.asdict(self)
@@ -124,4 +132,4 @@ class Env(msgspec.Struct, kw_only=True):
                 }
             )
 
-        return hyperjson.dumps(msgspec.structs.asdict(self))
+        return orjson.dumps(msgspec.structs.asdict(self))
